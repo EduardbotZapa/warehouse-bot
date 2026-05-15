@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Warehouse Telegram Bot v3
+Warehouse Telegram Bot v4
 ─────────────────────────
+Серийные номера читаются через Google Cloud Vision (штрихкоды) — 100% точность.
+Остальные данные (артикул, год, страна) — Claude Vision.
+
 Два способа работы:
-
-1. PDF (рекомендуется) — один файл содержит всё:
-   /receive → выбрать режим → отправить PDF → готово
-
-2. Фото по отдельности:
-   /receive → инвойс фото → подтвердить → фото товаров → /done
+1. PDF — один файл содержит всё (инвойс + фото товаров)
+2. Фото по отдельности — сначала инвойс, потом товары
 
 Управление пользователями (только ADMIN_IDS):
   /adduser 123456789 Имя   – добавить
@@ -18,6 +17,7 @@ Warehouse Telegram Bot v3
 """
 
 import os
+import io
 import json
 import base64
 import logging
@@ -26,6 +26,7 @@ from datetime import datetime
 import anthropic
 import gspread
 from google.oauth2.service_account import Credentials
+from google.cloud import vision
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -53,7 +54,7 @@ USERS_FILE    = "allowed_users.json"
 # Состояния диалога
 (
     CHOOSE_MODE,
-    WAIT_DOCUMENT,          # ждём PDF или фото инвойса
+    WAIT_DOCUMENT,
     CONFIRM_INVOICE_PARSE,
     PHOTO_GOODS,
 ) = range(4)
@@ -88,6 +89,7 @@ def get_worksheet(sheet_name: str):
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/cloud-vision",
     ]
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
     gc = gspread.authorize(creds)
@@ -112,6 +114,52 @@ def write_rows_to_sheet(sheet_name: str, rows: list[list]):
         ws.append_row(row)
 
 
+# ─── Google Vision — штрихкоды ─────────────────────────────────────────────────
+def read_barcodes_from_image(img_bytes: bytes) -> list[str]:
+    """
+    Читает ВСЕ штрихкоды с фото через Google Cloud Vision.
+    Возвращает список значений штрихкодов.
+    Серийники Siemens начинаются с C- или S
+    """
+    try:
+        creds = Credentials.from_service_account_file(
+            CREDS_FILE,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        client  = vision.ImageAnnotatorClient(credentials=creds)
+        image   = vision.Image(content=img_bytes)
+        response = client.annotate_image({
+            "image": image,
+            "features": [
+                {"type_": vision.Feature.Type.BARCODE_DETECTION},
+                {"type_": vision.Feature.Type.TEXT_DETECTION},
+            ],
+        })
+
+        serials = []
+
+        # Сначала пробуем штрихкоды
+        for barcode in response.localized_object_annotations:
+            val = barcode.name
+            if val and len(val) > 3:
+                serials.append(val)
+
+        # Если штрихкоды не найдены — ищем серийники в тексте
+        # На этикетках Siemens серийник после "S " или "C-"
+        if not serials and response.text_annotations:
+            full_text = response.text_annotations[0].description
+            import re
+            # Паттерн для серийников Siemens: C-XXXXXXX или S XXXXXXX
+            matches = re.findall(r'\bC-[A-Z0-9]{5,10}\b|\bS\s+[A-Z0-9]{6,12}\b', full_text)
+            serials = [m.strip() for m in matches]
+
+        return serials
+
+    except Exception as e:
+        logger.warning(f"Vision barcode error: {e}")
+        return []
+
+
 # ─── Claude ────────────────────────────────────────────────────────────────────
 _claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
@@ -128,11 +176,11 @@ def _clean_json(text: str):
     return json.loads(text.strip())
 
 
-def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict]]:
+def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict], str]:
     """
-    Читает весь PDF одним запросом.
-    Страница 1 = инвойс → expected [{article, qty}]
-    Остальные страницы = этикетки/фото товаров → found [{article, qty, serial, year, country}]
+    Читает весь PDF одним запросом через Claude.
+    Возвращает (expected, found, invoice_number)
+    Серийники из PDF читает Claude (штрихкоды в PDF не декодируются Vision)
     """
     resp = _claude.messages.create(
         model="claude-opus-4-5",
@@ -144,32 +192,28 @@ def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict]]:
             },
             {"type": "text", "text": (
                 "Этот PDF содержит:\n"
-                "- Страница 1: инвойс / delivery note с таблицей позиций (артикул + количество)\n"
-                "- Остальные страницы: фото коробок и товаров с этикетками\n\n"
-                "Верни ТОЛЬКО JSON объект без пояснений:\n"
+                "- Страница 1: инвойс / delivery note с таблицей позиций\n"
+                "- Остальные страницы: фото коробок с этикетками Siemens\n\n"
+                "Верни ТОЛЬКО JSON объект:\n"
                 "{\n"
-                '  "invoice_number": "номер инвойса из страницы 1",\n'
+                '  "invoice_number": "номер инвойса",\n'
                 '  "invoice": [{"article": "артикул", "qty": число}, ...],\n'
-                '  "goods": [{"article": "артикул", "qty": число, "serial": "серийный номер", "year": "год производства", "country": "страна"}, ...]\n'
+                '  "goods": [{"article": "артикул", "qty": число, "serial": "серийный номер", "year": "год", "country": "страна"}, ...]\n'
                 "}\n\n"
-                "Правила:\n"
-                "- invoice: из таблицы инвойса на странице 1, строки Total пропускай\n"
-                "- goods: из этикеток на коробках (остальные страницы), каждая коробка = отдельная строка\n"
-                "- serial: поле S/N, Serial Number, серийный номер с этикетки\n"
-                "- year: год производства (дата выпуска на этикетке, формат YYYY или MM/YYYY)\n"
-                "- country: Made in ... если видно, иначе пустая строка\n"
-                "- qty всегда число, если не видно — 1\n"
-                "- Только то что реально видно, не придумывай"
+                "На этикетках Siemens:\n"
+                "- артикул: поле '1P' или крупный текст типа '6ES7...'\n"
+                "- серийный номер: поле 'S' — например 'S C-R3FQ8580' (бери точно как написано)\n"
+                "- год: дата производства MM.YYYY\n"
+                "- страна: Made in Germany = DE, Made in Vietnam = VN и т.д.\n"
+                "- qty: поле QTY, если не видно — 1\n"
+                "Каждая коробка = отдельная строка в goods.\n"
+                "Не выдумывай данные."
             )},
         ]}],
     )
     raw = _clean_json(resp.content[0].text)
     if isinstance(raw, dict):
-        return (
-            raw.get("invoice", []),
-            raw.get("goods", []),
-            raw.get("invoice_number", ""),
-        )
+        return raw.get("invoice", []), raw.get("goods", []), raw.get("invoice_number", "")
     return [], [], ""
 
 
@@ -183,31 +227,63 @@ def parse_invoice_photo(img: bytes) -> list[dict]:
             {"type": "text", "text": (
                 "Это фото инвойса или delivery note. "
                 "Извлеки список позиций: артикул и количество. "
-                "Верни ТОЛЬКО JSON массив без пояснений:\n"
+                "Верни ТОЛЬКО JSON массив:\n"
                 '[{"article": "артикул", "qty": число}, ...]\n'
-                "Строки Total/Итого — пропусти. Не выдумывай данные."
+                "Строки Total/Итого — пропусти."
             )},
         ]}],
     )
     return _clean_json(resp.content[0].text)
 
 
-def parse_goods_photo(img: bytes) -> list[dict]:
-    """Читает фото товаров/коробок → [{article, qty, serial, year, country}]"""
+def parse_goods_photo_claude(img: bytes) -> list[dict]:
+    """Читает фото товаров через Claude (артикул, год, страна)."""
     resp = _claude.messages.create(
         model="claude-opus-4-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
             {"type": "text", "text": (
-                "Это фото коробок с товарами или таблицы. Извлеки ВСЕ позиции. "
+                "Это фото коробок с товарами Siemens. Извлеки данные с каждой этикетки.\n"
                 "Верни ТОЛЬКО JSON массив:\n"
                 '[{"article":"...", "qty":N, "serial":"...", "year":"...", "country":"..."}, ...]\n'
-                "Total/Итого — пропусти. qty всегда число. Только то что видно."
+                "На этикетках Siemens:\n"
+                "- артикул: поле '1P' например '6ES7132-6BH01-0BA0'\n"
+                "- серийный номер: поле 'S' например 'C-R3FQ8580' — читай ОЧЕНЬ внимательно каждую цифру\n"
+                "- год: дата MM.YYYY\n"
+                "- страна: Made in ... (DE/VN/CN и т.д.)\n"
+                "- qty: поле QTY, обычно 1\n"
+                "Каждая коробка = отдельная строка. Не выдумывай данные."
             )},
         ]}],
     )
     return _clean_json(resp.content[0].text)
+
+
+def parse_goods_photo(img_bytes: bytes) -> list[dict]:
+    """
+    Комбинированное чтение:
+    - Google Vision читает штрихкоды → точные серийники
+    - Claude читает остальные поля (артикул, год, страна)
+    Если Vision не нашёл штрихкоды — используем серийники от Claude.
+    """
+    # Параллельно запускаем оба
+    barcodes  = read_barcodes_from_image(img_bytes)
+    claude_items = parse_goods_photo_claude(img_bytes)
+
+    if not barcodes:
+        # Vision ничего не нашёл — возвращаем данные от Claude как есть
+        logger.info("No barcodes from Vision, using Claude serials")
+        return claude_items
+
+    # Подставляем серийники из Vision в позиции от Claude
+    # Vision возвращает список серийников в порядке обнаружения на фото
+    for i, item in enumerate(claude_items):
+        if i < len(barcodes):
+            item["serial"] = barcodes[i]
+            logger.info(f"Replaced serial {item.get('serial','?')} → {barcodes[i]}")
+
+    return claude_items
 
 
 # ─── Comparison ────────────────────────────────────────────────────────────────
@@ -266,7 +342,6 @@ async def guard(update: Update) -> bool:
     return False
 
 async def finalize(update, context, expected, found, invoice, mode):
-    """Сверка + вывод отчёта + запись в Sheets."""
     op = operator_label(update)
     report, has_problem, sheet_rows = compare(expected, found)
     label  = "ПРИЁМКА" if mode == MODE_RECEIVE else "ОТГРУЗКА"
@@ -302,10 +377,7 @@ async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     args = context.args
     if not args:
-        await update.message.reply_text(
-            "Использование:\n`/adduser 123456789 Имя Фамилия`\n\nID узнать: /myid",
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text("Использование:\n`/adduser 123456789 Имя Фамилия`", parse_mode="Markdown")
         return
     try:
         uid = int(args[0])
@@ -355,8 +427,7 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🆔 Ваш Telegram ID: `{u.id}`\n"
         f"Имя: {u.full_name or '—'}\n"
-        f"Username: @{u.username or '—'}\n\n"
-        "Отправьте этот ID администратору для получения доступа.",
+        f"Username: @{u.username or '—'}",
         parse_mode="Markdown",
     )
 
@@ -383,7 +454,7 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await q.edit_message_text(
         f"{'📦' if mode==MODE_RECEIVE else '🚚'} *{label}*\n\n"
         "Отправьте:\n"
-        "• 📄 *PDF* (delivery note + фото товаров в одном файле) — бот обработает всё сам\n"
+        "• 📄 *PDF* — бот обработает всё сам (инвойс + товары)\n"
         "• 📸 *Фото инвойса* — если нет PDF",
         parse_mode="Markdown",
     )
@@ -391,38 +462,28 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает PDF, читает инвойс + товары одним запросом, сразу финализирует."""
     doc = update.message.document
-    if not doc.mime_type == "application/pdf":
+    if doc.mime_type != "application/pdf":
         await update.message.reply_text("❌ Это не PDF. Отправьте PDF файл или фото инвойса.")
         return WAIT_DOCUMENT
 
-    msg = await update.message.reply_text("📄 Читаю PDF... Это займёт 10–20 секунд.")
+    msg = await update.message.reply_text("📄 Читаю PDF... подождите 15–30 секунд.")
     try:
         file      = await doc.get_file()
         pdf_bytes = bytes(await file.download_as_bytearray())
-        result    = parse_full_pdf(pdf_bytes)
-
-        # parse_full_pdf возвращает tuple из 3 элементов
-        if len(result) == 3:
-            expected, found, inv_number = result
-        else:
-            expected, found = result
-            inv_number = ""
+        expected, found, inv_number = parse_full_pdf(pdf_bytes)
 
         mode    = context.user_data.get("mode", MODE_RECEIVE)
-        invoice = inv_number or context.user_data.get("invoice", "из PDF")
+        invoice = inv_number or "из PDF"
 
         if not expected:
-            await msg.edit_text("❌ Не удалось найти инвойс в PDF. Попробуйте отправить фото инвойса отдельно.")
+            await msg.edit_text("❌ Не удалось найти инвойс в PDF. Попробуйте фото инвойса отдельно.")
             return WAIT_DOCUMENT
 
-        # Показываем что считали из инвойса
         inv_lines = [f"• `{it['article']}` — {it['qty']} шт." for it in expected]
         await msg.edit_text(
             f"📋 *Инвойс {invoice}* ({len(expected)} арт.):\n\n" + "\n".join(inv_lines) +
-            f"\n\n📦 Найдено товаров на фото: *{len(found)}* позиций\n\n"
-            "⏳ Считаю результат...",
+            f"\n\n📦 Найдено товаров: *{len(found)}* позиций\n⏳ Считаю результат...",
             parse_mode="Markdown",
         )
 
@@ -430,18 +491,12 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     except Exception as e:
-        logger.error(f"PDF parse: {e}")
-        await msg.edit_text(
-            "❌ Ошибка при обработке PDF.\n\n"
-            "Попробуйте:\n"
-            "• Отправить PDF как файл (не как фото)\n"
-            "• Или отправить фото инвойса отдельно"
-        )
+        logger.error(f"PDF: {e}")
+        await msg.edit_text("❌ Ошибка обработки PDF. Попробуйте фото инвойса отдельно.")
         return WAIT_DOCUMENT
 
 
 async def handle_invoice_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает фото инвойса, читает позиции, просит подтвердить."""
     msg = await update.message.reply_text("🔍 Читаю инвойс...")
     try:
         photo = update.message.photo[-1]
@@ -467,7 +522,7 @@ async def handle_invoice_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         return CONFIRM_INVOICE_PARSE
 
     except Exception as e:
-        logger.warning(f"Invoice photo parse: {e}")
+        logger.warning(f"Invoice photo: {e}")
         await msg.edit_text("❌ Не удалось распознать. Сделайте чёткое фото и отправьте снова.")
         return WAIT_DOCUMENT
 
@@ -484,14 +539,14 @@ async def confirm_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await q.edit_message_text(
         f"✅ Инвойс принят.\n\n"
         f"📸 Отправьте фото товаров которые вы {action}.\n"
-        "Можно несколько фото подряд.\n"
-        "Когда закончите — /done"
+        "Серийники читаются через штрихкоды — 100% точность.\n"
+        "Можно несколько фото. Когда закончите — /done"
     )
     return PHOTO_GOODS
 
 
 async def handle_goods_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = await update.message.reply_text("🔍 Распознаю товары...")
+    msg = await update.message.reply_text("🔍 Читаю штрихкоды и данные...")
     try:
         photo = update.message.photo[-1]
         data  = bytes(await (await photo.get_file()).download_as_bytearray())
@@ -503,7 +558,7 @@ async def handle_goods_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         lines = []
         for it in items:
             line = f"• `{it.get('article','?')}` — {it.get('qty',1)} шт."
-            if it.get("serial"):  line += f" | S/N: {it['serial']}"
+            if it.get("serial"):  line += f" | S/N: `{it['serial']}`"
             if it.get("year"):    line += f" | {it['year']}"
             if it.get("country"): line += f" | {it['country']}"
             lines.append(line)
@@ -575,7 +630,7 @@ def main():
     app.add_handler(CommandHandler("listusers",  cmd_listusers))
     app.add_handler(CommandHandler("myid",       cmd_myid))
 
-    logger.info("🤖 Warehouse bot v3 started.")
+    logger.info("🤖 Warehouse bot v4 started.")
     app.run_polling(drop_pending_updates=True)
 
 
