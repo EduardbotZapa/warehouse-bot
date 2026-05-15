@@ -95,8 +95,8 @@ def get_worksheet(sheet_name: str):
     gc = gspread.authorize(creds)
     sp = gc.open_by_key(SPREADSHEET_ID)
     headers = {
-        SHEET_RECEIVE: ["Дата", "Инвойс", "Оператор", "Артикул", "Ожидалось", "Получено", "Статус", "Серийный №", "Год произв.", "Страна происх."],
-        SHEET_SHIP:    ["Дата", "Заказ/Клиент", "Оператор", "Артикул", "Ожидалось", "Отгружено", "Статус", "Серийный №", "Год произв.", "Страна происх."],
+        SHEET_RECEIVE: ["Дата", "Инвойс", "Оператор", "Артикул", "Ожидалось", "Получено", "Статус", "Серийный №", "Верификация", "Год произв.", "Страна происх."],
+        SHEET_SHIP:    ["Дата", "Заказ/Клиент", "Оператор", "Артикул", "Ожидалось", "Отгружено", "Статус", "Серийный №", "Верификация", "Год произв.", "Страна происх."],
     }
     try:
         ws = sp.worksheet(sheet_name)
@@ -237,53 +237,77 @@ def parse_invoice_photo(img: bytes) -> list[dict]:
 
 
 def parse_goods_photo_claude(img: bytes) -> list[dict]:
-    """Читает фото товаров через Claude (артикул, год, страна)."""
+    """
+    Читает фото товаров через Claude.
+    Для каждой позиции возвращает:
+    - serial_text: текст поля S (читает как текст)
+    - serial_barcode: цифры/буквы под штрихкодом поля S (читает как подпись штрихкода)
+    - Если serial_text == serial_barcode -> verified=true (оригинал)
+    - Если отличаются -> verified=false (возможная подделка)
+    """
     resp = _claude.messages.create(
         model="claude-opus-4-5",
         max_tokens=2000,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
             {"type": "text", "text": (
-                "Это фото коробок с товарами Siemens. Извлеки данные с каждой этикетки.\n"
+                "Это фото коробок с товарами. Извлеки данные с каждой этикетки.\n"
                 "Верни ТОЛЬКО JSON массив:\n"
-                '[{"article":"...", "qty":N, "serial":"...", "year":"...", "country":"..."}, ...]\n'
-                "На этикетках Siemens:\n"
-                "- артикул: поле '1P' например '6ES7132-6BH01-0BA0'\n"
-                "- серийный номер: поле 'S' например 'C-R3FQ8580' — читай ОЧЕНЬ внимательно каждую цифру\n"
-                "- год: дата MM.YYYY\n"
-                "- страна: Made in ... (DE/VN/CN и т.д.)\n"
-                "- qty: поле QTY, обычно 1\n"
-                "Каждая коробка = отдельная строка. Не выдумывай данные."
+                '[{"article":"...", "qty":N, "serial_text":"...", "serial_barcode":"...", "year":"...", "country":"..."}, ...]\n\n'
+                "ПРАВИЛА — читай строго:\n"
+                "- article: поле 1P на этикетке, например 6ES7132-6BH01-0BA0\n"
+                "- serial_text: текст который написан РЯДОМ с буквой S на этикетке\n"
+                "  Например: если написано 'S LBT1137487' то serial_text = 'LBT1137487'\n"
+                "  Например: если написано 'S C-R3FQ8580' то serial_text = 'C-R3FQ8580'\n"
+                "  ЕСЛИ поле S не видно — пустая строка\n"
+                "- serial_barcode: цифры/буквы напечатанные ПОД штрихкодом который стоит рядом с буквой S\n"
+                "  Это текстовая подпись того же штрихкода\n"
+                "  ЕСЛИ не видно — пустая строка\n"
+                "- НИКОГДА не придумывай данные — пустая строка лучше неверного\n"
+                "- year: дата MM.YYYY если видно, иначе пустую строку\n"
+                "- country: Made in Germany=DE, Vietnam=VN, China=CN, иначе пустую строку\n"
+                "- qty: поле QTY если видно, иначе 1\n\n"
+                "Каждая коробка = отдельная строка. Только то что реально видно на фото."
             )},
         ]}],
     )
     return _clean_json(resp.content[0].text)
 
-
 def parse_goods_photo(img_bytes: bytes) -> list[dict]:
     """
-    Комбинированное чтение:
-    - Google Vision читает штрихкоды → точные серийники
-    - Claude читает остальные поля (артикул, год, страна)
-    Если Vision не нашёл штрихкоды — используем серийники от Claude.
+    Claude читает два значения серийника:
+    - serial_text: текст поля S
+    - serial_barcode: подпись под штрихкодом S
+    Сравниваем — если совпадают = оригинал, если нет = подделка.
     """
-    # Параллельно запускаем оба
-    barcodes  = read_barcodes_from_image(img_bytes)
-    claude_items = parse_goods_photo_claude(img_bytes)
+    items = parse_goods_photo_claude(img_bytes)
 
-    if not barcodes:
-        # Vision ничего не нашёл — возвращаем данные от Claude как есть
-        logger.info("No barcodes from Vision, using Claude serials")
-        return claude_items
+    for item in items:
+        s_text    = str(item.get("serial_text",    "")).strip()
+        s_barcode = str(item.get("serial_barcode", "")).strip()
 
-    # Подставляем серийники из Vision в позиции от Claude
-    # Vision возвращает список серийников в порядке обнаружения на фото
-    for i, item in enumerate(claude_items):
-        if i < len(barcodes):
-            item["serial"] = barcodes[i]
-            logger.info(f"Replaced serial {item.get('serial','?')} → {barcodes[i]}")
+        if s_text and s_barcode:
+            if s_text.upper() == s_barcode.upper():
+                # Совпадают — оригинал
+                item["serial"]   = s_text
+                item["verified"] = True
+                logger.info(f"Serial verified: {s_text}")
+            else:
+                # Не совпадают — подозрение на подделку
+                item["serial"]   = s_text
+                item["verified"] = False
+                logger.warning(f"Serial MISMATCH! text={s_text} barcode={s_barcode}")
+        elif s_text:
+            item["serial"]   = s_text
+            item["verified"] = None  # только текст, штрихкод не виден
+        elif s_barcode:
+            item["serial"]   = s_barcode
+            item["verified"] = None  # только штрихкод
+        else:
+            item["serial"]   = ""
+            item["verified"] = None
 
-    return claude_items
+    return items
 
 
 # ─── Comparison ────────────────────────────────────────────────────────────────
@@ -325,10 +349,11 @@ def compare(expected: list[dict], found: list[dict]):
     for art, exp, got, st in meta:
         for item in found_details.get(art, [{}]):
             sheet_rows.append({
-                "article": art, "expected": exp, "got": got, "status": st,
-                "serial":  item.get("serial", ""),
-                "year":    item.get("year",   ""),
-                "country": item.get("country",""),
+                "article":  art, "expected": exp, "got": got, "status": st,
+                "serial":   item.get("serial",   ""),
+                "verified": item.get("verified",  None),
+                "year":     item.get("year",      ""),
+                "country":  item.get("country",   ""),
             })
 
     return "\n".join(lines), has_prob, sheet_rows
@@ -357,9 +382,14 @@ async def finalize(update, context, expected, found, invoice, mode):
     try:
         now  = datetime.now().strftime("%Y-%m-%d %H:%M")
         sn   = SHEET_RECEIVE if mode == MODE_RECEIVE else SHEET_SHIP
+        def verified_label(v):
+            if v is True:  return "✅ Оригинал"
+            if v is False: return "🚨 ПОДДЕЛКА?"
+            return "—"
+
         rows = [[now, invoice, op,
                  r["article"], r["expected"], r["got"], r["status"],
-                 r["serial"], r["year"], r["country"]]
+                 r["serial"], verified_label(r.get("verified")), r["year"], r["country"]]
                 for r in sheet_rows]
         write_rows_to_sheet(sn, rows)
         await update.message.reply_text(f"✅ Записано → лист «{sn}»")
@@ -555,16 +585,37 @@ async def handle_goods_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["found_items"].extend(items)
         total = len(context.user_data["found_items"])
 
-        lines = []
+        lines      = []
+        forgeries  = []
         for it in items:
-            line = f"• `{it.get('article','?')}` — {it.get('qty',1)} шт."
-            if it.get("serial"):  line += f" | S/N: `{it['serial']}`"
+            verified = it.get("verified")
+            serial   = it.get("serial", "")
+            s_text   = it.get("serial_text", "")
+            s_bar    = it.get("serial_barcode", "")
+
+            if verified is False:
+                ico  = "🚨"
+                note = f" | ⚠️ ПОДДЕЛКА? текст=`{s_text}` штрихкод=`{s_bar}`"
+                forgeries.append(it.get("article","?"))
+            elif verified is True:
+                ico  = "✅"
+                note = f" | S/N: `{serial}` ✅"
+            else:
+                ico  = "•"
+                note = f" | S/N: `{serial}`" if serial else ""
+
+            line = f"{ico} `{it.get('article','?')}` — {it.get('qty',1)} шт.{note}"
             if it.get("year"):    line += f" | {it['year']}"
             if it.get("country"): line += f" | {it['country']}"
             lines.append(line)
 
+        alert = ""
+        if forgeries:
+            alert = f"\n\n🚨 *ВОЗМОЖНЫЕ ПОДДЕЛКИ:* {', '.join(forgeries)}"
+
         await msg.edit_text(
             f"✅ Это фото: {len(items)} поз.\n\n" + "\n".join(lines) +
+            alert +
             f"\n\n📊 Накоплено: *{total}* строк | Ещё фото или /done",
             parse_mode="Markdown",
         )
