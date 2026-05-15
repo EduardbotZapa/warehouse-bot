@@ -3,559 +3,489 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Warehouse Scanner</title>
+<title>Scanner</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-  :root {
-    --bg: #0a0a0a;
-    --surface: #141414;
-    --border: #2a2a2a;
-    --accent: #00ff88;
-    --accent2: #0088ff;
-    --danger: #ff4444;
-    --text: #ffffff;
-    --text2: #888888;
-    --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-  }
+:root {
+  --bg: #0f0f0f;
+  --surface: #1a1a1a;
+  --border: #2e2e2e;
+  --green: #00e676;
+  --text: #ffffff;
+  --muted: #777;
+}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font);
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow-x: hidden;
-  }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
-  .header {
-    padding: 16px 20px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: var(--surface);
-  }
+/* Camera */
+#camera-wrap {
+  position: relative;
+  width: 100%;
+  height: 45vw;
+  background: #000;
+  overflow: hidden;
+  flex-shrink: 0;
+}
 
-  .header-icon {
-    width: 36px;
-    height: 36px;
-    background: var(--accent);
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
-  }
+#video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 
-  .header h1 {
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: -0.3px;
-  }
+#canvas { display: none; }
 
-  .header p {
-    font-size: 12px;
-    color: var(--text2);
-    margin-top: 1px;
-  }
+/* Viewfinder */
+.finder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
 
-  /* Scanner area */
-  .scanner-wrap {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 1;
-    background: #000;
-    overflow: hidden;
-  }
+.finder-box {
+  width: 70%;
+  height: 35%;
+  position: relative;
+  border: 2px solid rgba(0,230,118,0.3);
+}
 
-  #scanner {
-    width: 100% !important;
-    height: 100% !important;
-  }
+.finder-box::before,
+.finder-box::after,
+.finder-box .c3,
+.finder-box .c4 {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-color: var(--green);
+  border-style: solid;
+}
+.finder-box::before { top:-2px; left:-2px; border-width:3px 0 0 3px; }
+.finder-box::after  { top:-2px; right:-2px; border-width:3px 3px 0 0; }
+.finder-box .c3     { bottom:-2px; right:-2px; border-width:0 3px 3px 0; }
+.finder-box .c4     { bottom:-2px; left:-2px; border-width:0 0 3px 3px; }
 
-  #scanner video {
-    width: 100% !important;
-    height: 100% !important;
-    object-fit: cover;
-  }
+.laser {
+  position: absolute;
+  left: 10%; right: 10%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--green), transparent);
+  animation: laser 1.8s ease-in-out infinite;
+  top: 20%;
+}
 
-  /* Overlay frame */
-  .scanner-overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
+@keyframes laser {
+  0%,100% { top: 15%; opacity: 0.3; }
+  50% { top: 80%; opacity: 1; }
+}
 
-  .scan-frame {
-    width: 65%;
-    aspect-ratio: 3/1;
-    position: relative;
-  }
+.finder-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+}
 
-  .scan-frame::before,
-  .scan-frame::after,
-  .scan-frame .corner-br,
-  .scan-frame .corner-bl {
-    content: '';
-    position: absolute;
-    width: 24px;
-    height: 24px;
-    border-color: var(--accent);
-    border-style: solid;
-  }
+/* Flash */
+#flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--green);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.05s;
+}
 
-  .scan-frame::before {
-    top: 0; left: 0;
-    border-width: 3px 0 0 3px;
-    border-radius: 4px 0 0 0;
-  }
+/* Content */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 10px;
+  overflow: hidden;
+}
 
-  .scan-frame::after {
-    top: 0; right: 0;
-    border-width: 3px 3px 0 0;
-    border-radius: 0 4px 0 0;
-  }
+/* Mode tabs */
+.tabs {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
 
-  .scan-frame .corner-br {
-    bottom: 0; right: 0;
-    border-width: 0 3px 3px 0;
-    border-radius: 0 0 4px 0;
-  }
+.tab {
+  flex: 1;
+  padding: 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
 
-  .scan-frame .corner-bl {
-    bottom: 0; left: 0;
-    border-width: 0 0 3px 3px;
-    border-radius: 0 0 0 4px;
-  }
+.tab.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #000;
+  font-weight: 700;
+}
 
-  .scan-line {
-    position: absolute;
-    left: 4px; right: 4px;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    animation: scanline 1.5s ease-in-out infinite;
-    top: 50%;
-  }
+/* Current article */
+#article-bar {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  display: none;
+  flex-shrink: 0;
+}
 
-  @keyframes scanline {
-    0%, 100% { transform: translateY(-20px); opacity: 0; }
-    20% { opacity: 1; }
-    80% { opacity: 1; }
-    50% { transform: translateY(20px); }
-  }
+#article-bar.show { display: block; }
+#article-bar span { color: var(--muted); font-size: 11px; display: block; margin-bottom: 2px; }
+#article-bar strong { font-size: 15px; letter-spacing: -0.3px; }
 
-  .scan-hint {
-    position: absolute;
-    bottom: 16px;
-    left: 0; right: 0;
-    text-align: center;
-    font-size: 12px;
-    color: rgba(255,255,255,0.6);
-    letter-spacing: 0.5px;
-  }
+/* List */
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
 
-  /* Content below scanner */
-  .content {
-    flex: 1;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
+.list-header span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
 
-  /* Article info card */
-  .article-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 14px 16px;
-    display: none;
-  }
+.badge {
+  background: var(--green);
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  min-width: 24px;
+  text-align: center;
+}
 
-  .article-card.visible { display: block; }
+#list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  -webkit-overflow-scrolling: touch;
+}
 
-  .article-label {
-    font-size: 11px;
-    color: var(--text2);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 4px;
-  }
+.empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 20px;
+}
 
-  .article-value {
-    font-size: 16px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.3px;
-  }
+.item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: pop 0.2s ease;
+}
 
-  /* Scanned list */
-  .scanned-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
+.item.fresh { border-color: var(--green); }
 
-  .scanned-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text2);
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-  }
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
 
-  .scanned-count {
-    background: var(--accent);
-    color: #000;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 20px;
-  }
+.item-n { font-size: 11px; color: var(--muted); min-width: 18px; }
 
-  .scanned-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    max-height: 200px;
-    overflow-y: auto;
-  }
+.item-info { flex: 1; min-width: 0; }
+.item-serial { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-art { font-size: 11px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  .scanned-item {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 14px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    animation: slideIn 0.2s ease;
-  }
+.item-del {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
 
-  .scanned-item.new {
-    border-color: var(--accent);
-    background: rgba(0,255,136,0.05);
-  }
+/* Buttons */
+.btn-row {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
 
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateY(-8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+.btn {
+  flex: 1;
+  padding: 14px;
+  border-radius: 12px;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 0.15s, transform 0.1s;
+}
 
-  .item-num {
-    font-size: 11px;
-    color: var(--text2);
-    min-width: 20px;
-  }
-
-  .item-serial {
-    font-size: 14px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    flex: 1;
-  }
-
-  .item-del {
-    background: none;
-    border: none;
-    color: var(--text2);
-    font-size: 18px;
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 6px;
-    transition: color 0.2s;
-  }
-
-  .item-del:active { color: var(--danger); }
-
-  /* Empty state */
-  .empty-state {
-    text-align: center;
-    padding: 24px;
-    color: var(--text2);
-    font-size: 13px;
-  }
-
-  /* Buttons */
-  .btn-row {
-    display: flex;
-    gap: 10px;
-    margin-top: auto;
-    padding-top: 8px;
-  }
-
-  .btn {
-    flex: 1;
-    padding: 14px;
-    border: none;
-    border-radius: 14px;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.15s, transform 0.1s;
-    font-family: var(--font);
-  }
-
-  .btn:active { transform: scale(0.97); opacity: 0.85; }
-
-  .btn-primary {
-    background: var(--accent);
-    color: #000;
-  }
-
-  .btn-secondary {
-    background: var(--surface);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  /* Success flash */
-  .flash {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,255,136,0.12);
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s;
-    z-index: 100;
-  }
-
-  .flash.show { opacity: 1; }
-
-  /* Mode selector */
-  .mode-bar {
-    display: flex;
-    gap: 8px;
-    padding: 0 0 4px;
-  }
-
-  .mode-btn {
-    flex: 1;
-    padding: 10px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text2);
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    font-family: var(--font);
-    transition: all 0.2s;
-  }
-
-  .mode-btn.active {
-    background: var(--accent2);
-    border-color: var(--accent2);
-    color: #fff;
-  }
+.btn:active { transform: scale(0.97); }
+.btn-clear { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.btn-send { background: var(--green); color: #000; }
+.btn-send:disabled { opacity: 0.35; }
 </style>
 </head>
 <body>
 
-<div class="flash" id="flash"></div>
-
-<div class="header">
-  <div class="header-icon">📦</div>
-  <div>
-    <h1>Warehouse Scanner</h1>
-    <p id="mode-label">Режим: Серійний номер (S)</p>
-  </div>
-</div>
-
-<div class="scanner-wrap">
-  <div id="scanner"></div>
-  <div class="scanner-overlay">
-    <div class="scan-frame">
-      <div class="corner-br"></div>
-      <div class="corner-bl"></div>
-      <div class="scan-line"></div>
+<div id="camera-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <div id="flash-overlay"></div>
+  <div class="finder">
+    <div class="finder-box">
+      <div class="c3"></div>
+      <div class="c4"></div>
+      <div class="laser"></div>
     </div>
-    <div class="scan-hint">Наведіть на штрихкод поля S</div>
+    <div class="finder-hint" id="hint">Наведіть на штрихкод поля S</div>
   </div>
 </div>
 
 <div class="content">
-
-  <div class="mode-bar">
-    <button class="mode-btn active" onclick="setMode('serial')" id="btn-serial">📋 Серійний №</button>
-    <button class="mode-btn" onclick="setMode('article')" id="btn-article">🏷 Артикул</button>
+  <div class="tabs">
+    <button class="tab active" onclick="setMode('serial')" id="tab-s">📋 Серійний №</button>
+    <button class="tab" onclick="setMode('article')" id="tab-a">🏷 Артикул</button>
   </div>
 
-  <div class="article-card" id="article-card">
-    <div class="article-label">Поточний артикул</div>
-    <div class="article-value" id="article-display">—</div>
+  <div id="article-bar">
+    <span>Поточний артикул</span>
+    <strong id="art-val">—</strong>
   </div>
 
-  <div class="scanned-header">
-    <div class="scanned-title">Відскановано</div>
-    <div class="scanned-count" id="count">0</div>
+  <div class="list-header">
+    <span>Відскановано</span>
+    <div class="badge" id="badge">0</div>
   </div>
 
-  <div class="scanned-list" id="list">
-    <div class="empty-state">Наведіть камеру на штрихкод</div>
+  <div id="list">
+    <div class="empty">Наведіть камеру на штрихкод</div>
   </div>
 
   <div class="btn-row">
-    <button class="btn btn-secondary" onclick="clearAll()">Очистити</button>
-    <button class="btn btn-primary" id="btn-send" onclick="sendToBot()" disabled>
-      Надіслати боту
-    </button>
+    <button class="btn btn-clear" onclick="clearAll()">Очистити</button>
+    <button class="btn btn-send" id="btn-send" onclick="sendData()" disabled>Надіслати боту</button>
   </div>
-
 </div>
 
 <script>
-  const tg = window.Telegram.WebApp;
-  tg.expand();
-  tg.ready();
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.expand(); tg.ready(); }
 
-  let mode = 'serial';
-  let scanned = [];
-  let currentArticle = '';
-  let lastScanned = '';
-  let lastScannedTime = 0;
-  let scanner;
+let mode = 'serial';
+let scanned = [];
+let currentArticle = '';
+let scanning = true;
+let lastValue = '';
+let lastTime = 0;
+let animFrame;
 
-  function setMode(m) {
-    mode = m;
-    document.getElementById('btn-serial').classList.toggle('active', m === 'serial');
-    document.getElementById('btn-article').classList.toggle('active', m === 'article');
-    document.getElementById('mode-label').textContent =
-      m === 'serial' ? 'Режим: Серійний номер (S)' : 'Режим: Артикул (1P)';
-    document.querySelector('.scan-hint').textContent =
-      m === 'serial' ? 'Наведіть на штрихкод поля S' : 'Наведіть на штрихкод поля 1P';
-  }
+// ── ZXing via CDN ──────────────────────────────────────────────────────
+const ZXING_CDN = 'https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js';
 
-  function flash() {
-    const el = document.getElementById('flash');
-    el.classList.add('show');
-    setTimeout(() => el.classList.remove('show'), 200);
-  }
+function loadZXing() {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = ZXING_CDN;
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
 
-  function vibrate() {
-    if (navigator.vibrate) navigator.vibrate(40);
-    if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
-  }
+async function startScanner() {
+  try {
+    await loadZXing();
+    const hints = new Map();
+    const formats = [
+      ZXing.BarcodeFormat.CODE_128,
+      ZXing.BarcodeFormat.CODE_39,
+      ZXing.BarcodeFormat.EAN_13,
+      ZXing.BarcodeFormat.EAN_8,
+      ZXing.BarcodeFormat.DATA_MATRIX,
+      ZXing.BarcodeFormat.QR_CODE,
+    ];
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
-  function onScan(text) {
-    const now = Date.now();
-    // Debounce — не дублювати той самий штрихкод за 2 секунди
-    if (text === lastScanned && now - lastScannedTime < 2000) return;
-    lastScanned = text;
-    lastScannedTime = now;
+    const reader = new ZXing.MultiFormatReader();
+    reader.setHints(hints);
 
-    if (mode === 'article') {
-      currentArticle = text;
-      document.getElementById('article-display').textContent = text;
-      document.getElementById('article-card').classList.add('visible');
-      flash();
-      vibrate();
-      return;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+
+    const video = document.getElementById('video');
+    video.srcObject = stream;
+    await video.play();
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    function tick() {
+      if (!scanning) { animFrame = requestAnimationFrame(tick); return; }
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) { animFrame = requestAnimationFrame(tick); return; }
+
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+
+      try {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const lum = ZXing.RGBLuminanceSource
+          ? new ZXing.RGBLuminanceSource(imgData.data, canvas.width, canvas.height)
+          : null;
+
+        if (lum) {
+          const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+          const result = reader.decode(bmp);
+          if (result) onScan(result.getText());
+        }
+      } catch(e) {
+        // NotFoundException is normal — no barcode in frame
+      }
+
+      animFrame = requestAnimationFrame(tick);
     }
 
-    // Serial mode
-    scanned.unshift({ serial: text, article: currentArticle });
-    flash();
-    vibrate();
-    renderList();
+    animFrame = requestAnimationFrame(tick);
+
+  } catch(err) {
+    console.error(err);
+    document.getElementById('camera-wrap').innerHTML =
+      `<div style="padding:30px;text-align:center;color:#777;font-size:13px">
+        ❌ Немає доступу до камери.<br><br>
+        Дозвольте доступ у налаштуваннях браузера.
+      </div>`;
+  }
+}
+
+// ── Scan handler ───────────────────────────────────────────────────────
+function onScan(text) {
+  text = text.trim();
+  const now = Date.now();
+  if (text === lastValue && now - lastTime < 2500) return;
+  lastValue = text;
+  lastTime  = now;
+
+  flash();
+  vibrate();
+
+  if (mode === 'article') {
+    currentArticle = text;
+    document.getElementById('art-val').textContent = text;
+    document.getElementById('article-bar').classList.add('show');
+    return;
   }
 
-  function renderList() {
-    const list = document.getElementById('list');
-    const count = document.getElementById('count');
-    const btnSend = document.getElementById('btn-send');
+  scanned.unshift({ serial: text, article: currentArticle });
+  render();
+}
 
-    count.textContent = scanned.length;
-    btnSend.disabled = scanned.length === 0;
+// ── UI helpers ─────────────────────────────────────────────────────────
+function flash() {
+  const el = document.getElementById('flash-overlay');
+  el.style.opacity = '0.5';
+  setTimeout(() => el.style.opacity = '0', 150);
+}
 
-    if (scanned.length === 0) {
-      list.innerHTML = '<div class="empty-state">Наведіть камеру на штрихкод</div>';
-      return;
-    }
+function vibrate() {
+  try { navigator.vibrate?.(50); } catch(e){}
+  try { tg?.HapticFeedback?.impactOccurred('light'); } catch(e){}
+}
 
-    list.innerHTML = scanned.map((item, i) => `
-      <div class="scanned-item ${i === 0 ? 'new' : ''}" id="item-${i}">
-        <span class="item-num">${scanned.length - i}</span>
-        <span class="item-serial">${item.serial}${item.article ? '<br><small style="color:#888;font-size:11px">' + item.article + '</small>' : ''}</span>
-        <button class="item-del" onclick="deleteItem(${i})">×</button>
+function setMode(m) {
+  mode = m;
+  document.getElementById('tab-s').classList.toggle('active', m === 'serial');
+  document.getElementById('tab-a').classList.toggle('active', m === 'article');
+  document.getElementById('hint').textContent =
+    m === 'serial' ? 'Наведіть на штрихкод поля S' : 'Наведіть на штрихкод поля 1P';
+}
+
+function render() {
+  const list  = document.getElementById('list');
+  const badge = document.getElementById('badge');
+  const btn   = document.getElementById('btn-send');
+
+  badge.textContent = scanned.length;
+  btn.disabled = scanned.length === 0;
+
+  if (!scanned.length) {
+    list.innerHTML = '<div class="empty">Наведіть камеру на штрихкод</div>';
+    return;
+  }
+
+  list.innerHTML = scanned.map((it, i) => `
+    <div class="item ${i === 0 ? 'fresh' : ''}" id="i${i}">
+      <span class="item-n">${scanned.length - i}</span>
+      <div class="item-info">
+        <div class="item-serial">${it.serial}</div>
+        ${it.article ? `<div class="item-art">${it.article}</div>` : ''}
       </div>
-    `).join('');
+      <button class="item-del" onclick="del(${i})">×</button>
+    </div>
+  `).join('');
 
-    // Remove 'new' class after animation
-    setTimeout(() => {
-      const el = document.getElementById('item-0');
-      if (el) el.classList.remove('new');
-    }, 500);
+  setTimeout(() => document.getElementById('i0')?.classList.remove('fresh'), 600);
+}
+
+function del(i) { scanned.splice(i, 1); render(); }
+
+function clearAll() {
+  scanned = [];
+  currentArticle = '';
+  document.getElementById('article-bar').classList.remove('show');
+  render();
+}
+
+function sendData() {
+  if (!scanned.length) return;
+  const payload = JSON.stringify({ action: 'serials', items: scanned });
+  if (tg) {
+    tg.sendData(payload);
+  } else {
+    alert('Дані: ' + payload);
   }
+}
 
-  function deleteItem(i) {
-    scanned.splice(i, 1);
-    renderList();
-  }
-
-  function clearAll() {
-    scanned = [];
-    currentArticle = '';
-    document.getElementById('article-card').classList.remove('visible');
-    renderList();
-  }
-
-  function sendToBot() {
-    if (scanned.length === 0) return;
-    const data = JSON.stringify({
-      action: 'serials',
-      items: scanned,
-    });
-    tg.sendData(data);
-  }
-
-  // Init scanner
-  function initScanner() {
-    scanner = new Html5Qrcode("scanner");
-    const config = {
-      fps: 15,
-      qrbox: { width: 280, height: 100 },
-      aspectRatio: 1.0,
-      supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
-    };
-
-    scanner.start(
-      { facingMode: "environment" },
-      config,
-      onScan,
-      () => {} // ignore errors
-    ).catch(err => {
-      console.error("Scanner error:", err);
-      document.querySelector('.scanner-wrap').innerHTML =
-        '<div style="padding:40px;text-align:center;color:#888">Немає доступу до камери.<br>Дозвольте доступ і перезавантажте.</div>';
-    });
-  }
-
-  // Hide html5-qrcode default UI elements
-  const style = document.createElement('style');
-  style.textContent = `
-    #scanner img { display: none !important; }
-    #scanner button { display: none !important; }
-    #scanner select { display: none !important; }
-    #scanner div[id$="__dashboard"] { display: none !important; }
-    #scanner div[id$="__header_message"] { display: none !important; }
-  `;
-  document.head.appendChild(style);
-
-  window.addEventListener('load', initScanner);
+// ── Start ──────────────────────────────────────────────────────────────
+startScanner();
 </script>
 </body>
 </html>
