@@ -26,7 +26,7 @@ from datetime import datetime
 import anthropic
 import gspread
 from google.oauth2.service_account import Credentials
-from google.cloud import vision
+# google vision removed
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -89,7 +89,6 @@ def get_worksheet(sheet_name: str):
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/cloud-vision",
     ]
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
     gc = gspread.authorize(creds)
@@ -113,51 +112,6 @@ def write_rows_to_sheet(sheet_name: str, rows: list[list]):
     for row in rows:
         ws.append_row(row)
 
-
-# ─── Google Vision — штрихкоды ─────────────────────────────────────────────────
-def read_barcodes_from_image(img_bytes: bytes) -> list[str]:
-    """
-    Читает ВСЕ штрихкоды с фото через Google Cloud Vision.
-    Возвращает список значений штрихкодов.
-    Серийники Siemens начинаются с C- или S
-    """
-    try:
-        creds = Credentials.from_service_account_file(
-            CREDS_FILE,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
-        client  = vision.ImageAnnotatorClient(credentials=creds)
-        image   = vision.Image(content=img_bytes)
-        response = client.annotate_image({
-            "image": image,
-            "features": [
-                {"type_": vision.Feature.Type.BARCODE_DETECTION},
-                {"type_": vision.Feature.Type.TEXT_DETECTION},
-            ],
-        })
-
-        serials = []
-
-        # Сначала пробуем штрихкоды
-        for barcode in response.localized_object_annotations:
-            val = barcode.name
-            if val and len(val) > 3:
-                serials.append(val)
-
-        # Если штрихкоды не найдены — ищем серийники в тексте
-        # На этикетках Siemens серийник после "S " или "C-"
-        if not serials and response.text_annotations:
-            full_text = response.text_annotations[0].description
-            import re
-            # Паттерн для серийников Siemens: C-XXXXXXX или S XXXXXXX
-            matches = re.findall(r'\bC-[A-Z0-9]{5,10}\b|\bS\s+[A-Z0-9]{6,12}\b', full_text)
-            serials = [m.strip() for m in matches]
-
-        return serials
-
-    except Exception as e:
-        logger.warning(f"Vision barcode error: {e}")
-        return []
 
 
 # ─── Claude ────────────────────────────────────────────────────────────────────
@@ -236,15 +190,8 @@ def parse_invoice_photo(img: bytes) -> list[dict]:
     return _clean_json(resp.content[0].text)
 
 
-def parse_goods_photo_claude(img: bytes) -> list[dict]:
-    """
-    Читает фото товаров через Claude.
-    Для каждой позиции возвращает:
-    - serial_text: текст поля S (читает как текст)
-    - serial_barcode: цифры/буквы под штрихкодом поля S (читает как подпись штрихкода)
-    - Если serial_text == serial_barcode -> verified=true (оригинал)
-    - Если отличаются -> verified=false (возможная подделка)
-    """
+def _read_serials_pass1(img: bytes) -> list[dict]:
+    """Первое чтение — читает текст поля S как обычный текст."""
     resp = _claude.messages.create(
         model="claude-opus-4-5",
         max_tokens=2000,
@@ -253,61 +200,89 @@ def parse_goods_photo_claude(img: bytes) -> list[dict]:
             {"type": "text", "text": (
                 "Это фото коробок с товарами. Извлеки данные с каждой этикетки.\n"
                 "Верни ТОЛЬКО JSON массив:\n"
-                '[{"article":"...", "qty":N, "serial_text":"...", "serial_barcode":"...", "year":"...", "country":"..."}, ...]\n\n'
-                "ПРАВИЛА — читай строго:\n"
-                "- article: поле 1P на этикетке, например 6ES7132-6BH01-0BA0\n"
-                "- serial_text: текст который написан РЯДОМ с буквой S на этикетке\n"
-                "  Например: если написано 'S LBT1137487' то serial_text = 'LBT1137487'\n"
-                "  Например: если написано 'S C-R3FQ8580' то serial_text = 'C-R3FQ8580'\n"
-                "  ЕСЛИ поле S не видно — пустая строка\n"
-                "- serial_barcode: цифры/буквы напечатанные ПОД штрихкодом который стоит рядом с буквой S\n"
-                "  Это текстовая подпись того же штрихкода\n"
-                "  ЕСЛИ не видно — пустая строка\n"
-                "- НИКОГДА не придумывай данные — пустая строка лучше неверного\n"
-                "- year: дата MM.YYYY если видно, иначе пустую строку\n"
-                "- country: Made in Germany=DE, Vietnam=VN, China=CN, иначе пустую строку\n"
-                "- qty: поле QTY если видно, иначе 1\n\n"
-                "Каждая коробка = отдельная строка. Только то что реально видно на фото."
+                '[{"article":"...", "qty":N, "serial":"...", "year":"...", "country":"..."}, ...]\n\n'
+                "ПРАВИЛА:\n"
+                "- article: поле 1P, например 6ES7132-6BH01-0BA0\n"
+                "- serial: текст поля S на этикетке\n"
+                "  Если написано 'S C-RNA2A12Z' → serial = 'C-RNA2A12Z'\n"
+                "  Если написано 'S RRT9' → serial = 'RRT9'\n"
+                "  Если написано 'S LBT1137487' → serial = 'LBT1137487'\n"
+                "  Читай КАЖДУЮ букву и цифру максимально внимательно\n"
+                "  Если не видно чётко — пустая строка\n"
+                "- year: MM.YYYY если видно, иначе пустую строку\n"
+                "- country: DE/VN/CN если видно, иначе пустую строку\n"
+                "- qty: поле QTY если видно, иначе 1\n"
+                "Каждая коробка = отдельная строка. Не придумывай данные."
             )},
         ]}],
     )
     return _clean_json(resp.content[0].text)
 
-def parse_goods_photo(img_bytes: bytes) -> list[dict]:
-    """
-    Claude читает два значения серийника:
-    - serial_text: текст поля S
-    - serial_barcode: подпись под штрихкодом S
-    Сравниваем — если совпадают = оригинал, если нет = подделка.
-    """
-    items = parse_goods_photo_claude(img_bytes)
 
-    for item in items:
-        s_text    = str(item.get("serial_text",    "")).strip()
-        s_barcode = str(item.get("serial_barcode", "")).strip()
+def _read_serials_pass2(img: bytes, articles: list[str]) -> list[str]:
+    """Второе независимое чтение — читает только серийники поля S."""
+    arts_str = ", ".join(articles)
+    resp = _claude.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=1000,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
+            {"type": "text", "text": (
+                f"На фото {len(articles)} коробок с артикулами: {arts_str}\n\n"
+                "Для каждой коробки найди серийный номер — это текст рядом с буквой S на этикетке.\n"
+                "Читай максимально внимательно каждую букву и цифру.\n"
+                "Верни ТОЛЬКО JSON массив серийников в том же порядке что и коробки на фото:\n"
+                '["серийник1", "серийник2", ...]\n'
+                "Если серийник не виден — пустая строка.\n"
+                "Не придумывай данные."
+            )},
+        ]}],
+    )
+    result = _clean_json(resp.content[0].text)
+    if isinstance(result, list):
+        return [str(s) for s in result]
+    return [""] * len(articles)
 
-        if s_text and s_barcode:
-            if s_text.upper() == s_barcode.upper():
-                # Совпадают — оригинал
-                item["serial"]   = s_text
-                item["verified"] = True
-                logger.info(f"Serial verified: {s_text}")
+
+def parse_goods_photo_claude(img: bytes) -> list[dict]:
+    """
+    Двойное независимое чтение серийников через Claude.
+    Pass 1: читает все данные включая серийник поля S
+    Pass 2: читает только серийники независимо
+    Сравнивает — если совпадают = verified, если нет = предупреждение.
+    """
+    items = _read_serials_pass1(img)
+    if not items:
+        return items
+
+    articles  = [it.get("article", "") for it in items]
+    serials_2 = _read_serials_pass2(img, articles)
+
+    for i, item in enumerate(items):
+        s1 = str(item.get("serial", "")).strip().upper()
+        s2 = str(serials_2[i] if i < len(serials_2) else "").strip().upper()
+
+        if s1 and s2:
+            if s1 == s2:
+                item["serial_text"]    = item.get("serial", "")
+                item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
+                item["verified"]       = True
+                logger.info(f"Serial verified: {s1}")
             else:
-                # Не совпадают — подозрение на подделку
-                item["serial"]   = s_text
-                item["verified"] = False
-                logger.warning(f"Serial MISMATCH! text={s_text} barcode={s_barcode}")
-        elif s_text:
-            item["serial"]   = s_text
-            item["verified"] = None  # только текст, штрихкод не виден
-        elif s_barcode:
-            item["serial"]   = s_barcode
-            item["verified"] = None  # только штрихкод
+                item["serial_text"]    = item.get("serial", "")
+                item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
+                item["verified"]       = False
+                logger.warning(f"Serial MISMATCH pass1={s1} pass2={s2}")
         else:
-            item["serial"]   = ""
-            item["verified"] = None
+            item["serial_text"]    = item.get("serial", "")
+            item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
+            item["verified"]       = None
 
     return items
+
+def parse_goods_photo(img_bytes: bytes) -> list[dict]:
+    """Двойное чтение через Claude — верификация серийников."""
+    return parse_goods_photo_claude(img_bytes)
 
 
 # ─── Comparison ────────────────────────────────────────────────────────────────
