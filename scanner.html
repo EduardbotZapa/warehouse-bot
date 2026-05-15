@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Warehouse Scanner</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --border: #2a2a2a;
+    --accent: #00ff88;
+    --accent2: #0088ff;
+    --danger: #ff4444;
+    --text: #ffffff;
+    --text2: #888888;
+    --font: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  .header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+  }
+
+  .header-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--accent);
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .header h1 {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+
+  .header p {
+    font-size: 12px;
+    color: var(--text2);
+    margin-top: 1px;
+  }
+
+  /* Scanner area */
+  .scanner-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    background: #000;
+    overflow: hidden;
+  }
+
+  #scanner {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  #scanner video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover;
+  }
+
+  /* Overlay frame */
+  .scanner-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .scan-frame {
+    width: 65%;
+    aspect-ratio: 3/1;
+    position: relative;
+  }
+
+  .scan-frame::before,
+  .scan-frame::after,
+  .scan-frame .corner-br,
+  .scan-frame .corner-bl {
+    content: '';
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border-color: var(--accent);
+    border-style: solid;
+  }
+
+  .scan-frame::before {
+    top: 0; left: 0;
+    border-width: 3px 0 0 3px;
+    border-radius: 4px 0 0 0;
+  }
+
+  .scan-frame::after {
+    top: 0; right: 0;
+    border-width: 3px 3px 0 0;
+    border-radius: 0 4px 0 0;
+  }
+
+  .scan-frame .corner-br {
+    bottom: 0; right: 0;
+    border-width: 0 3px 3px 0;
+    border-radius: 0 0 4px 0;
+  }
+
+  .scan-frame .corner-bl {
+    bottom: 0; left: 0;
+    border-width: 0 0 3px 3px;
+    border-radius: 0 0 0 4px;
+  }
+
+  .scan-line {
+    position: absolute;
+    left: 4px; right: 4px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: scanline 1.5s ease-in-out infinite;
+    top: 50%;
+  }
+
+  @keyframes scanline {
+    0%, 100% { transform: translateY(-20px); opacity: 0; }
+    20% { opacity: 1; }
+    80% { opacity: 1; }
+    50% { transform: translateY(20px); }
+  }
+
+  .scan-hint {
+    position: absolute;
+    bottom: 16px;
+    left: 0; right: 0;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255,255,255,0.6);
+    letter-spacing: 0.5px;
+  }
+
+  /* Content below scanner */
+  .content {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Article info card */
+  .article-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    display: none;
+  }
+
+  .article-card.visible { display: block; }
+
+  .article-label {
+    font-size: 11px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .article-value {
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.3px;
+  }
+
+  /* Scanned list */
+  .scanned-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .scanned-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+
+  .scanned-count {
+    background: var(--accent);
+    color: #000;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+
+  .scanned-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .scanned-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideIn 0.2s ease;
+  }
+
+  .scanned-item.new {
+    border-color: var(--accent);
+    background: rgba(0,255,136,0.05);
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .item-num {
+    font-size: 11px;
+    color: var(--text2);
+    min-width: 20px;
+  }
+
+  .item-serial {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    flex: 1;
+  }
+
+  .item-del {
+    background: none;
+    border: none;
+    color: var(--text2);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 6px;
+    transition: color 0.2s;
+  }
+
+  .item-del:active { color: var(--danger); }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 24px;
+    color: var(--text2);
+    font-size: 13px;
+  }
+
+  /* Buttons */
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: auto;
+    padding-top: 8px;
+  }
+
+  .btn {
+    flex: 1;
+    padding: 14px;
+    border: none;
+    border-radius: 14px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    font-family: var(--font);
+  }
+
+  .btn:active { transform: scale(0.97); opacity: 0.85; }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+  }
+
+  .btn-secondary {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Success flash */
+  .flash {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,255,136,0.12);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 100;
+  }
+
+  .flash.show { opacity: 1; }
+
+  /* Mode selector */
+  .mode-bar {
+    display: flex;
+    gap: 8px;
+    padding: 0 0 4px;
+  }
+
+  .mode-btn {
+    flex: 1;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text2);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: var(--font);
+    transition: all 0.2s;
+  }
+
+  .mode-btn.active {
+    background: var(--accent2);
+    border-color: var(--accent2);
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<div class="flash" id="flash"></div>
+
+<div class="header">
+  <div class="header-icon">📦</div>
+  <div>
+    <h1>Warehouse Scanner</h1>
+    <p id="mode-label">Режим: Серійний номер (S)</p>
+  </div>
+</div>
+
+<div class="scanner-wrap">
+  <div id="scanner"></div>
+  <div class="scanner-overlay">
+    <div class="scan-frame">
+      <div class="corner-br"></div>
+      <div class="corner-bl"></div>
+      <div class="scan-line"></div>
+    </div>
+    <div class="scan-hint">Наведіть на штрихкод поля S</div>
+  </div>
+</div>
+
+<div class="content">
+
+  <div class="mode-bar">
+    <button class="mode-btn active" onclick="setMode('serial')" id="btn-serial">📋 Серійний №</button>
+    <button class="mode-btn" onclick="setMode('article')" id="btn-article">🏷 Артикул</button>
+  </div>
+
+  <div class="article-card" id="article-card">
+    <div class="article-label">Поточний артикул</div>
+    <div class="article-value" id="article-display">—</div>
+  </div>
+
+  <div class="scanned-header">
+    <div class="scanned-title">Відскановано</div>
+    <div class="scanned-count" id="count">0</div>
+  </div>
+
+  <div class="scanned-list" id="list">
+    <div class="empty-state">Наведіть камеру на штрихкод</div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="clearAll()">Очистити</button>
+    <button class="btn btn-primary" id="btn-send" onclick="sendToBot()" disabled>
+      Надіслати боту
+    </button>
+  </div>
+
+</div>
+
+<script>
+  const tg = window.Telegram.WebApp;
+  tg.expand();
+  tg.ready();
+
+  let mode = 'serial';
+  let scanned = [];
+  let currentArticle = '';
+  let lastScanned = '';
+  let lastScannedTime = 0;
+  let scanner;
+
+  function setMode(m) {
+    mode = m;
+    document.getElementById('btn-serial').classList.toggle('active', m === 'serial');
+    document.getElementById('btn-article').classList.toggle('active', m === 'article');
+    document.getElementById('mode-label').textContent =
+      m === 'serial' ? 'Режим: Серійний номер (S)' : 'Режим: Артикул (1P)';
+    document.querySelector('.scan-hint').textContent =
+      m === 'serial' ? 'Наведіть на штрихкод поля S' : 'Наведіть на штрихкод поля 1P';
+  }
+
+  function flash() {
+    const el = document.getElementById('flash');
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 200);
+  }
+
+  function vibrate() {
+    if (navigator.vibrate) navigator.vibrate(40);
+    if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+  }
+
+  function onScan(text) {
+    const now = Date.now();
+    // Debounce — не дублювати той самий штрихкод за 2 секунди
+    if (text === lastScanned && now - lastScannedTime < 2000) return;
+    lastScanned = text;
+    lastScannedTime = now;
+
+    if (mode === 'article') {
+      currentArticle = text;
+      document.getElementById('article-display').textContent = text;
+      document.getElementById('article-card').classList.add('visible');
+      flash();
+      vibrate();
+      return;
+    }
+
+    // Serial mode
+    scanned.unshift({ serial: text, article: currentArticle });
+    flash();
+    vibrate();
+    renderList();
+  }
+
+  function renderList() {
+    const list = document.getElementById('list');
+    const count = document.getElementById('count');
+    const btnSend = document.getElementById('btn-send');
+
+    count.textContent = scanned.length;
+    btnSend.disabled = scanned.length === 0;
+
+    if (scanned.length === 0) {
+      list.innerHTML = '<div class="empty-state">Наведіть камеру на штрихкод</div>';
+      return;
+    }
+
+    list.innerHTML = scanned.map((item, i) => `
+      <div class="scanned-item ${i === 0 ? 'new' : ''}" id="item-${i}">
+        <span class="item-num">${scanned.length - i}</span>
+        <span class="item-serial">${item.serial}${item.article ? '<br><small style="color:#888;font-size:11px">' + item.article + '</small>' : ''}</span>
+        <button class="item-del" onclick="deleteItem(${i})">×</button>
+      </div>
+    `).join('');
+
+    // Remove 'new' class after animation
+    setTimeout(() => {
+      const el = document.getElementById('item-0');
+      if (el) el.classList.remove('new');
+    }, 500);
+  }
+
+  function deleteItem(i) {
+    scanned.splice(i, 1);
+    renderList();
+  }
+
+  function clearAll() {
+    scanned = [];
+    currentArticle = '';
+    document.getElementById('article-card').classList.remove('visible');
+    renderList();
+  }
+
+  function sendToBot() {
+    if (scanned.length === 0) return;
+    const data = JSON.stringify({
+      action: 'serials',
+      items: scanned,
+    });
+    tg.sendData(data);
+  }
+
+  // Init scanner
+  function initScanner() {
+    scanner = new Html5Qrcode("scanner");
+    const config = {
+      fps: 15,
+      qrbox: { width: 280, height: 100 },
+      aspectRatio: 1.0,
+      supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA],
+    };
+
+    scanner.start(
+      { facingMode: "environment" },
+      config,
+      onScan,
+      () => {} // ignore errors
+    ).catch(err => {
+      console.error("Scanner error:", err);
+      document.querySelector('.scanner-wrap').innerHTML =
+        '<div style="padding:40px;text-align:center;color:#888">Немає доступу до камери.<br>Дозвольте доступ і перезавантажте.</div>';
+    });
+  }
+
+  // Hide html5-qrcode default UI elements
+  const style = document.createElement('style');
+  style.textContent = `
+    #scanner img { display: none !important; }
+    #scanner button { display: none !important; }
+    #scanner select { display: none !important; }
+    #scanner div[id$="__dashboard"] { display: none !important; }
+    #scanner div[id$="__header_message"] { display: none !important; }
+  `;
+  document.head.appendChild(style);
+
+  window.addEventListener('load', initScanner);
+</script>
+</body>
+</html>
