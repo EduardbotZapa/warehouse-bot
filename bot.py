@@ -27,7 +27,7 @@ import anthropic
 import gspread
 from google.oauth2.service_account import Credentials
 # google vision removed
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters,
@@ -541,11 +541,18 @@ async def confirm_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["found_items"] = []
     action = "получили" if context.user_data["mode"] == MODE_RECEIVE else "отгружаете"
+    scanner_kb = [[
+        InlineKeyboardButton(
+            "📱 Сканувати серійники",
+            web_app=WebAppInfo(url="https://eduardbotzapa.github.io/warehouse-bot/scanner.html")
+        )
+    ]]
     await q.edit_message_text(
-        f"✅ Инвойс принят.\n\n"
-        f"📸 Отправьте фото товаров которые вы {action}.\n"
-        "Серийники читаются через штрихкоды — 100% точность.\n"
-        "Можно несколько фото. Когда закончите — /done"
+        f"✅ Інвойс прийнятий.\n\n"
+        f"Крок 1️⃣ — Відправте фото товарів (Claude прочитає артикул, рік, країну)\n\n"
+        f"Крок 2️⃣ — Натисніть кнопку нижче щоб відсканувати серійники\n\n"
+        "Коли все готово — /done",
+        reply_markup=InlineKeyboardMarkup(scanner_kb),
     )
     return PHOTO_GOODS
 
@@ -614,6 +621,59 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+async def handle_scanner_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает серийники от Mini App сканера."""
+    try:
+        raw  = update.message.web_app_data.data
+        data = json.loads(raw)
+        items = data.get("items", [])
+
+        if not items:
+            await update.message.reply_text("❌ Сканер не передав даних.")
+            return PHOTO_GOODS
+
+        # Merge scanner serials with existing found_items
+        found = context.user_data.get("found_items", [])
+
+        # Build map of existing items by article for merging
+        scanned_serials = [it.get("serial", "") for it in items]
+        scanned_articles = [it.get("article", "") for it in items]
+
+        # If found_items exist — update serials in order
+        if found:
+            for i, item in enumerate(found):
+                if i < len(items):
+                    item["serial"]   = items[i].get("serial", item.get("serial", ""))
+                    item["verified"] = True
+        else:
+            # No photo yet — create items from scanner only
+            for it in items:
+                found.append({
+                    "article":  it.get("article", "—"),
+                    "qty":      1,
+                    "serial":   it.get("serial", ""),
+                    "verified": True,
+                    "year":     "",
+                    "country":  "",
+                })
+
+        context.user_data["found_items"] = found
+
+        lines = [f"• `{it.get('serial','?')}`" + (f" — {it.get('article','')}" if it.get('article') else "") for it in items]
+        await update.message.reply_text(
+            f"📱 *Сканер передав {len(items)} серійників:*\n\n" +
+            "\n".join(lines) +
+            "\n\nВідправте фото товарів або /done якщо фото вже є.",
+            parse_mode="Markdown",
+        )
+        return PHOTO_GOODS
+
+    except Exception as e:
+        logger.error(f"Scanner data error: {e}")
+        await update.message.reply_text("❌ Помилка обробки даних сканера.")
+        return PHOTO_GOODS
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text("❌ Отменено. /start для нового старта.")
@@ -643,6 +703,7 @@ def main():
             ],
             PHOTO_GOODS: [
                 MessageHandler(filters.PHOTO, handle_goods_photo),
+                MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_scanner_data),
                 CommandHandler("done", done),
             ],
         },
