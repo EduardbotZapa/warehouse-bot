@@ -8,7 +8,7 @@
 * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 :root {
   --bg:#0f0f0f; --surface:#1c1c1e; --border:#2c2c2e;
-  --green:#30d158; --blue:#0a84ff; --red:#ff453a;
+  --green:#30d158; --blue:#0a84ff;
   --text:#fff; --muted:#8e8e93;
 }
 body {
@@ -18,92 +18,145 @@ body {
   padding-bottom:env(safe-area-inset-bottom);
 }
 .header {
-  padding:14px 16px 10px; background:var(--surface);
-  border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px;
+  padding:10px 16px; background:var(--surface);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px; flex-shrink:0;
 }
-.logo { font-size:24px; }
-.header h1 { font-size:16px; font-weight:700; }
-.header p  { font-size:12px; color:var(--muted); }
-.scan-zone { padding:16px; display:flex; flex-direction:column; gap:10px; flex-shrink:0; }
-.tabs { display:flex; gap:8px; }
+.logo { font-size:22px; }
+.header h1 { font-size:15px; font-weight:700; }
+.header p  { font-size:11px; color:var(--muted); }
+
+/* VIDEO PREVIEW */
+#video-wrap {
+  position:relative; width:100%; flex-shrink:0;
+  background:#000; display:none;
+}
+#video {
+  width:100%; display:block;
+  max-height:42vw; object-fit:cover;
+}
+/* scanning frame overlay */
+#video-wrap::after {
+  content:'';
+  position:absolute; inset:0;
+  background: linear-gradient(rgba(0,0,0,0.15) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.15) 100%);
+  pointer-events:none;
+}
+.scan-corner {
+  position:absolute; width:24px; height:24px;
+  border-color:var(--green); border-style:solid;
+  pointer-events:none;
+}
+.sc-tl { top:8px;  left:8px;  border-width:3px 0 0 3px; border-radius:3px 0 0 0; }
+.sc-tr { top:8px;  right:8px; border-width:3px 3px 0 0; border-radius:0 3px 0 0; }
+.sc-bl { bottom:8px; left:8px;  border-width:0 0 3px 3px; border-radius:0 0 0 3px; }
+.sc-br { bottom:8px; right:8px; border-width:0 3px 3px 0; border-radius:0 0 3px 0; }
+
+.scan-line-anim {
+  position:absolute; left:5%; right:5%;
+  height:2px; background:linear-gradient(90deg,transparent,var(--green),transparent);
+  animation:scanAnim 2s ease-in-out infinite; pointer-events:none;
+}
+@keyframes scanAnim {
+  0%   { top:10%; opacity:1; }
+  90%  { top:90%; opacity:1; }
+  100% { top:90%; opacity:0; }
+}
+
+/* START BUTTON */
+#start-btn {
+  margin:12px 16px; padding:16px; border-radius:14px;
+  border:2px dashed var(--green); background:rgba(48,209,88,0.08);
+  color:var(--green); font-size:16px; font-weight:700;
+  cursor:pointer; font-family:inherit;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+}
+#start-btn:active { transform:scale(0.98); }
+
+#cam-status {
+  font-size:12px; color:var(--muted); text-align:center;
+  padding:2px 16px 6px; min-height:20px; flex-shrink:0;
+}
+
+/* TABS */
+.tabs { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
 .tab {
-  flex:1; padding:10px; border-radius:10px;
+  flex:1; padding:9px; border-radius:10px;
   border:1px solid var(--border); background:var(--surface);
   color:var(--muted); font-size:13px; font-weight:600;
-  cursor:pointer; font-family:inherit; transition:all 0.15s;
+  cursor:pointer; font-family:inherit;
 }
 .tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
-.scan-btn {
-  width:100%; padding:20px; border-radius:16px;
-  border:2px dashed var(--green); background:rgba(48,209,88,0.08);
-  color:var(--green); font-size:17px; font-weight:700;
-  cursor:pointer; font-family:inherit;
-  display:flex; align-items:center; justify-content:center; gap:10px;
-  transition:all 0.15s;
-}
-.scan-btn:active { background:rgba(48,209,88,0.18); transform:scale(0.98); }
-#cam-status { font-size:12px; color:var(--muted); text-align:center; min-height:18px; }
-#art-bar {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:12px; padding:12px 14px; display:none;
-}
-#art-bar.show { display:block; }
-#art-bar small { color:var(--muted); font-size:11px; display:block; margin-bottom:3px; }
-#art-bar strong { font-size:15px; }
-.manual-wrap { display:flex; gap:8px; }
+
+/* MANUAL */
+.manual-wrap { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
 .manual-input {
-  flex:1; padding:11px 14px; border-radius:10px;
+  flex:1; padding:10px 12px; border-radius:10px;
   border:1px solid var(--border); background:var(--surface);
   color:var(--text); font-size:14px; font-family:inherit; outline:none;
 }
 .manual-input:focus { border-color:var(--blue); }
 .manual-add {
-  padding:11px 16px; border-radius:10px; background:var(--blue);
-  border:none; color:#fff; font-size:14px; font-weight:700;
-  cursor:pointer; font-family:inherit;
+  padding:10px 14px; border-radius:10px; background:var(--blue);
+  border:none; color:#fff; font-size:18px; font-weight:700;
+  cursor:pointer; font-family:inherit; flex-shrink:0;
 }
+
+/* ART BAR */
+#art-bar {
+  margin:0 16px 8px; background:var(--surface); border:1px solid var(--border);
+  border-radius:10px; padding:10px 12px; display:none; flex-shrink:0;
+}
+#art-bar.show { display:block; }
+#art-bar small { color:var(--muted); font-size:11px; display:block; margin-bottom:2px; }
+#art-bar strong { font-size:14px; }
+
+/* LIST */
 .list-header {
-  display:flex; justify-content:space-between; align-items:center; padding:0 16px;
+  display:flex; justify-content:space-between; align-items:center;
+  padding:0 16px 6px; flex-shrink:0;
 }
-.list-header span { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.8px; }
+.list-header span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.8px; }
 .badge {
   background:var(--green); color:#000; font-size:11px; font-weight:800;
   padding:2px 8px; border-radius:20px; min-width:24px; text-align:center;
 }
 #list {
-  flex:1; overflow-y:auto; padding:8px 16px;
-  display:flex; flex-direction:column; gap:6px;
-  -webkit-overflow-scrolling:touch; min-height:80px;
+  flex:1; overflow-y:auto; padding:0 16px;
+  display:flex; flex-direction:column; gap:5px;
+  -webkit-overflow-scrolling:touch; min-height:60px;
 }
-.empty { text-align:center; color:var(--muted); font-size:13px; padding:24px; }
+.empty { text-align:center; color:var(--muted); font-size:13px; padding:20px; }
 .item {
   background:var(--surface); border:1px solid var(--border);
-  border-radius:10px; padding:10px 12px;
-  display:flex; align-items:center; gap:10px; animation:pop 0.2s ease;
+  border-radius:10px; padding:9px 11px;
+  display:flex; align-items:center; gap:9px; animation:pop 0.2s ease;
 }
 .item.fresh { border-color:var(--green); }
 @keyframes pop {
-  from { opacity:0; transform:translateY(-6px) scale(0.97); }
-  to   { opacity:1; transform:translateY(0) scale(1); }
+  from { opacity:0; transform:translateY(-5px); }
+  to   { opacity:1; transform:translateY(0); }
 }
-.item-n { font-size:11px; color:var(--muted); min-width:18px; }
+.item-n { font-size:11px; color:var(--muted); min-width:16px; }
 .item-info { flex:1; min-width:0; }
-.item-serial { font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.item-serial { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .item-art { font-size:11px; color:var(--muted); margin-top:1px; }
-.item-del { background:none; border:none; color:var(--muted); font-size:22px; cursor:pointer; padding:0 2px; line-height:1; }
-.btn-row { display:flex; gap:8px; padding:12px 16px; flex-shrink:0; }
+.item-del { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 2px; line-height:1; }
+
+/* BOTTOM */
+.btn-row { display:flex; gap:8px; padding:10px 16px; flex-shrink:0; }
 .btn {
-  flex:1; padding:14px; border-radius:14px; border:none;
+  flex:1; padding:13px; border-radius:13px; border:none;
   font-size:15px; font-weight:700; cursor:pointer; font-family:inherit;
-  transition:opacity 0.15s, transform 0.1s;
 }
 .btn:active { transform:scale(0.97); }
 .btn-clear { background:var(--surface); color:var(--text); border:1px solid var(--border); }
 .btn-send  { background:var(--green); color:#000; }
 .btn-send:disabled { opacity:0.3; cursor:not-allowed; }
+
 .toast {
-  position:fixed; top:16px; left:50%; transform:translateX(-50%) translateY(-80px);
-  background:var(--green); color:#000; padding:10px 20px; border-radius:20px;
+  position:fixed; top:14px; left:50%; transform:translateX(-50%) translateY(-80px);
+  background:var(--green); color:#000; padding:9px 18px; border-radius:20px;
   font-size:14px; font-weight:700; transition:transform 0.3s ease; z-index:999; white-space:nowrap;
 }
 .toast.show { transform:translateX(-50%) translateY(0); }
@@ -121,29 +174,37 @@ body {
   </div>
 </div>
 
-<div class="scan-zone">
-  <div class="tabs">
-    <button class="tab active" onclick="setMode('serial')" id="tab-s">📋 Серійний №</button>
-    <button class="tab" onclick="setMode('article')" id="tab-a">🏷 Артикул</button>
-  </div>
+<!-- Video preview -->
+<div id="video-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <div class="scan-corner sc-tl"></div>
+  <div class="scan-corner sc-tr"></div>
+  <div class="scan-corner sc-bl"></div>
+  <div class="scan-corner sc-br"></div>
+  <div class="scan-line-anim"></div>
+</div>
 
-  <button class="scan-btn" id="scan-btn" onclick="startCamera()">
-    <span>📷</span>
-    <span id="scan-label">Натисніть щоб запустити камеру</span>
-  </button>
+<!-- Start button (hidden after camera starts) -->
+<button id="start-btn" onclick="startCamera()">
+  <span>📷</span><span id="start-label">Натисніть щоб запустити камеру</span>
+</button>
 
-  <div id="cam-status"></div>
+<div id="cam-status"></div>
 
-  <div id="art-bar">
-    <small>Поточний артикул</small>
-    <strong id="art-val">—</strong>
-  </div>
+<div class="tabs">
+  <button class="tab active" onclick="setMode('serial')" id="tab-s">📋 Серійний №</button>
+  <button class="tab" onclick="setMode('article')" id="tab-a">🏷 Артикул</button>
+</div>
 
-  <div class="manual-wrap">
-    <input class="manual-input" id="manual" placeholder="Або введіть вручну..."
-      autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-    <button class="manual-add" onclick="addManual()">+</button>
-  </div>
+<div id="art-bar">
+  <small>Поточний артикул</small>
+  <strong id="art-val">—</strong>
+</div>
+
+<div class="manual-wrap">
+  <input class="manual-input" id="manual" placeholder="Або введіть вручну..."
+    autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+  <button class="manual-add" onclick="addManual()">+</button>
 </div>
 
 <div class="list-header">
@@ -161,11 +222,11 @@ body {
 </div>
 
 <script>
-try { const tg=window.Telegram?.WebApp; if(tg){tg.expand();tg.ready();} } catch(e){}
+try{const tg=window.Telegram?.WebApp;if(tg){tg.expand();tg.ready();}}catch(e){}
 
-let mode='serial', scanned=[], currentArticle='';
-let cameraStarted=false, codeReader=null, videoStream=null, videoEl=null;
-let lastDetected='', lastDetectedTime=0;
+let mode='serial',scanned=[],currentArticle='';
+let cameraStarted=false,codeReader=null,videoStream=null;
+let lastDetected='',lastDetectedTime=0;
 
 function setMode(m){
   mode=m;
@@ -175,74 +236,73 @@ function setMode(m){
     m==='serial'?'Режим: Серійний номер (S)':'Режим: Артикул (1P)';
 }
 
-function setStatus(text){ document.getElementById('cam-status').textContent=text; }
+function setStatus(text){document.getElementById('cam-status').textContent=text;}
 
 function loadScript(src){
   return new Promise((resolve,reject)=>{
     const s=document.createElement('script');
-    s.src=src; s.onload=resolve; s.onerror=reject;
+    s.src=src;s.onload=resolve;s.onerror=reject;
     document.head.appendChild(s);
   });
 }
 
 async function startCamera(){
-  if(cameraStarted) return;
+  if(cameraStarted)return;
   cameraStarted=true;
-  const btn=document.getElementById('scan-btn');
-  document.getElementById('scan-label').textContent='⏳ Завантаження…';
+  document.getElementById('start-label').textContent='⏳ Завантаження…';
   setStatus('Завантаження бібліотеки…');
 
-  // Load ZXing — try two CDNs
   let loaded=false;
-  const cdns=[
+  for(const cdn of[
     'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.3/zxing.min.js',
     'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'
-  ];
-  for(const cdn of cdns){
-    try{ await loadScript(cdn); loaded=true; break; }catch(e){}
+  ]){
+    try{await loadScript(cdn);loaded=true;break;}catch(e){}
   }
 
   if(!loaded){
-    setStatus('❌ Не вдалося завантажити бібліотеку. Введіть вручну.');
-    document.getElementById('scan-label').textContent='📷 Камера недоступна';
-    cameraStarted=false; return;
+    setStatus('❌ Бібліотека не завантажилась. Введіть вручну.');
+    document.getElementById('start-label').textContent='📷 Спробувати знову';
+    cameraStarted=false;return;
   }
 
   setStatus('Запит доступу до камери…');
-
   try{
     videoStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}}
+      video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}
     });
-    videoEl=document.createElement('video');
-    videoEl.srcObject=videoStream;
-    videoEl.setAttribute('playsinline','');
-    videoEl.muted=true;
-    await videoEl.play();
 
-    btn.style.borderStyle='solid';
-    btn.style.background='rgba(48,209,88,0.15)';
-    document.getElementById('scan-label').textContent='📷 Камера активна — наводьте';
-    setStatus('✓ Сканування активне');
-    startZXing();
+    const video=document.getElementById('video');
+    video.srcObject=videoStream;
+    await video.play();
+
+    // Show video, hide start button
+    document.getElementById('video-wrap').style.display='block';
+    document.getElementById('start-btn').style.display='none';
+    setStatus('✓ Сканування активне — наводьте на штрихкод');
+
+    startZXing(video);
 
   }catch(e){
-    setStatus('❌ Немає доступу до камери. Перевірте дозволи: Safari → Налаштування → Конфіденційність → Камера');
-    document.getElementById('scan-label').textContent='📷 Натисніть щоб спробувати знову';
+    setStatus('❌ Немає доступу до камери. Safari → Налаштування → Камера');
+    document.getElementById('start-label').textContent='📷 Спробувати знову';
     cameraStarted=false;
   }
 }
 
-function startZXing(){
+function startZXing(video){
   try{
     const Z=window.ZXing||window.ZXingBrowser;
-    if(!Z){ setStatus('❌ ZXing не знайдено'); return; }
+    if(!Z){setStatus('❌ ZXing не знайдено');return;}
 
     const hints=new Map();
-    if(Z.DecodeHintType && Z.BarcodeFormat){
+    if(Z.DecodeHintType&&Z.BarcodeFormat){
       hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,[
-        Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39,
-        Z.BarcodeFormat.EAN_13,   Z.BarcodeFormat.DATA_MATRIX,
+        Z.BarcodeFormat.CODE_128,
+        Z.BarcodeFormat.CODE_39,
+        Z.BarcodeFormat.EAN_13,
+        Z.BarcodeFormat.DATA_MATRIX,
+        Z.BarcodeFormat.ITF,
       ]);
       hints.set(Z.DecodeHintType.TRY_HARDER,true);
     }
@@ -250,25 +310,26 @@ function startZXing(){
     const Reader=Z.BrowserMultiFormatReader||Z.MultiFormatReader;
     codeReader=new Reader(hints);
 
-    codeReader.decodeFromVideoElement(videoEl,(result,err)=>{
-      if(!result) return;
+    codeReader.decodeFromVideoElement(video,(result,err)=>{
+      if(!result)return;
       const val=(result.getText?result.getText():String(result)).trim();
-      if(!val) return;
+      if(!val||val.length<2)return;
       const now=Date.now();
-      if(val===lastDetected && now-lastDetectedTime<2500) return;
-      lastDetected=val; lastDetectedTime=now;
+      if(val===lastDetected&&now-lastDetectedTime<2500)return;
+      lastDetected=val;lastDetectedTime=now;
       onScan(val);
     });
+
   }catch(e){
-    setStatus('❌ Помилка: '+e.message);
+    setStatus('❌ Помилка ZXing: '+e.message);
     console.error(e);
   }
 }
 
 function onScan(text){
   text=text.replace(/[\r\n\t]/g,'').trim();
-  if(!text||text.length<2) return;
-  vibrate(); showToast(text);
+  if(!text||text.length<2)return;
+  vibrate();showToast(text);
   if(mode==='article'){
     currentArticle=text;
     document.getElementById('art-val').textContent=text;
@@ -281,7 +342,7 @@ function onScan(text){
 
 function addManual(){
   const val=document.getElementById('manual').value.trim();
-  if(!val) return;
+  if(!val)return;
   document.getElementById('manual').value='';
   onScan(val);
 }
@@ -290,10 +351,9 @@ document.getElementById('manual').addEventListener('keydown',e=>{if(e.key==='Ent
 function render(){
   const list=document.getElementById('list');
   const badge=document.getElementById('badge');
-  const btn=document.getElementById('btn-send');
+  document.getElementById('btn-send').disabled=scanned.length===0;
   badge.textContent=scanned.length;
-  btn.disabled=scanned.length===0;
-  if(!scanned.length){ list.innerHTML='<div class="empty">Натисніть кнопку сканування вище</div>'; return; }
+  if(!scanned.length){list.innerHTML='<div class="empty">Штрихкоди ще не відскановані</div>';return;}
   list.innerHTML=scanned.map((it,i)=>`
     <div class="item ${i===0?'fresh':''}" id="i${i}">
       <span class="item-n">${scanned.length-i}</span>
@@ -307,11 +367,14 @@ function render(){
 }
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function del(i){scanned.splice(i,1);render();}
-function clearAll(){scanned=[];currentArticle='';document.getElementById('art-bar').classList.remove('show');render();}
-
+function clearAll(){
+  scanned=[];currentArticle='';
+  document.getElementById('art-bar').classList.remove('show');
+  render();
+}
 function showToast(text){
   const t=document.getElementById('toast');
-  t.textContent=`✓ ${text.length>20?text.slice(0,20)+'…':text}`;
+  t.textContent=`✓ ${text.length>22?text.slice(0,22)+'…':text}`;
   t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),1800);
 }
@@ -319,17 +382,15 @@ function vibrate(){
   try{navigator.vibrate?.(40);}catch(e){}
   try{window.Telegram?.WebApp?.HapticFeedback?.impactOccurred('light');}catch(e){}
 }
-
 function sendData(){
-  if(!scanned.length) return;
+  if(!scanned.length)return;
   const payload=JSON.stringify({action:'serials',items:scanned});
-  try{ if(window.Telegram?.WebApp?.sendData){window.Telegram.WebApp.sendData(payload);return;} }catch(e){}
+  try{if(window.Telegram?.WebApp?.sendData){window.Telegram.WebApp.sendData(payload);return;}}catch(e){}
   const text=scanned.map(i=>i.serial).join('\n');
   navigator.clipboard?.writeText(text)
     .then(()=>alert('✓ Скопійовано '+scanned.length+' кодів!'))
-    .catch(()=>prompt('Скопіюйте коди:',text));
+    .catch(()=>prompt('Скопіюйте:',text));
 }
-
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){
     try{codeReader?.reset();}catch(e){}
