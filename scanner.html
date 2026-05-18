@@ -5,110 +5,88 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Scanner</title>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-:root {
-  --bg:#0f0f0f; --surface:#1c1c1e; --border:#2c2c2e;
-  --green:#30d158; --blue:#0a84ff;
-  --text:#fff; --muted:#8e8e93;
-}
+* { margin:0; padding:0; box-sizing:border-box; }
 body {
-  background:var(--bg); color:var(--text);
+  background:#0f0f0f; color:#fff;
   font-family:-apple-system,BlinkMacSystemFont,sans-serif;
   min-height:100vh; display:flex; flex-direction:column;
   padding-bottom:env(safe-area-inset-bottom);
 }
 .header {
-  padding:10px 16px; background:var(--surface);
-  border-bottom:1px solid var(--border);
+  padding:10px 16px; background:#1c1c1e;
+  border-bottom:1px solid #2c2c2e;
   display:flex; align-items:center; gap:10px; flex-shrink:0;
 }
-.logo { font-size:22px; }
 .header h1 { font-size:15px; font-weight:700; }
-.header p  { font-size:11px; color:var(--muted); }
+.header p  { font-size:11px; color:#8e8e93; }
 
 #video-wrap {
   position:relative; width:100%; flex-shrink:0;
   background:#000; display:none;
 }
-#video {
-  width:100%; display:block; max-height:45vw; object-fit:cover;
-}
-.scan-corner {
-  position:absolute; width:24px; height:24px;
-  border-color:var(--green); border-style:solid; pointer-events:none;
-}
-.sc-tl { top:8px;  left:8px;  border-width:3px 0 0 3px; border-radius:3px 0 0 0; }
-.sc-tr { top:8px;  right:8px; border-width:3px 3px 0 0; border-radius:0 3px 0 0; }
-.sc-bl { bottom:8px; left:8px;  border-width:0 0 3px 3px; border-radius:0 0 0 3px; }
-.sc-br { bottom:8px; right:8px; border-width:0 3px 3px 0; border-radius:0 0 3px 0; }
-.scan-line-anim {
-  position:absolute; left:5%; right:5%;
-  height:2px; background:linear-gradient(90deg,transparent,var(--green),transparent);
-  animation:scanAnim 2s ease-in-out infinite; pointer-events:none;
-}
-@keyframes scanAnim {
-  0%   { top:10%; opacity:1; }
-  90%  { top:90%; opacity:1; }
-  100% { top:90%; opacity:0; }
-}
-/* Flash on scan */
-#flash {
-  position:absolute; inset:0; background:#30d158;
-  opacity:0; pointer-events:none; transition:opacity 0.08s;
-}
-#flash.on { opacity:0.35; }
+#video { width:100%; display:block; max-height:50vw; object-fit:cover; }
+.sc { position:absolute; width:22px; height:22px; border-color:#30d158; border-style:solid; pointer-events:none; }
+.sc-tl { top:6px; left:6px;   border-width:3px 0 0 3px; }
+.sc-tr { top:6px; right:6px;  border-width:3px 3px 0 0; }
+.sc-bl { bottom:6px; left:6px;  border-width:0 0 3px 3px; }
+.sc-br { bottom:6px; right:6px; border-width:0 3px 3px 0; }
+#flash { position:absolute; inset:0; background:#30d158; opacity:0; pointer-events:none; transition:opacity 0.08s; }
+#flash.on { opacity:0.4; }
 
 #start-btn {
   margin:12px 16px; padding:16px; border-radius:14px;
-  border:2px dashed var(--green); background:rgba(48,209,88,0.08);
-  color:var(--green); font-size:16px; font-weight:700;
+  border:2px dashed #30d158; background:rgba(48,209,88,0.08);
+  color:#30d158; font-size:16px; font-weight:700;
   cursor:pointer; font-family:inherit;
   display:flex; align-items:center; justify-content:center; gap:8px;
 }
-#start-btn:active { transform:scale(0.98); }
 
-#cam-status {
-  font-size:12px; color:var(--muted); text-align:center;
-  padding:2px 16px 8px; min-height:20px; flex-shrink:0;
+/* DEBUG BOX */
+#debug {
+  margin:8px 16px; padding:10px 12px; background:#1a1a1a;
+  border:1px solid #2a2a2a; border-radius:10px; font-size:11px;
+  color:#8e8e93; display:none; font-family:monospace; line-height:1.6;
+  max-height:80px; overflow-y:auto;
 }
+#debug.show { display:block; }
 
-.tabs { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
+.tabs { display:flex; gap:8px; padding:8px 16px; flex-shrink:0; }
 .tab {
   flex:1; padding:9px; border-radius:10px;
-  border:1px solid var(--border); background:var(--surface);
-  color:var(--muted); font-size:13px; font-weight:600;
+  border:1px solid #2c2c2e; background:#1c1c1e;
+  color:#8e8e93; font-size:13px; font-weight:600;
   cursor:pointer; font-family:inherit;
 }
-.tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
+.tab.active { background:#0a84ff; border-color:#0a84ff; color:#fff; }
 
-.manual-wrap { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
+.manual-wrap { display:flex; gap:8px; padding:0 16px 8px; flex-shrink:0; }
 .manual-input {
   flex:1; padding:10px 12px; border-radius:10px;
-  border:1px solid var(--border); background:var(--surface);
-  color:var(--text); font-size:14px; font-family:inherit; outline:none;
+  border:1px solid #2c2c2e; background:#1c1c1e;
+  color:#fff; font-size:14px; font-family:inherit; outline:none;
 }
-.manual-input:focus { border-color:var(--blue); }
+.manual-input:focus { border-color:#0a84ff; }
 .manual-add {
-  padding:10px 14px; border-radius:10px; background:var(--blue);
+  padding:10px 14px; border-radius:10px; background:#0a84ff;
   border:none; color:#fff; font-size:18px; font-weight:700;
   cursor:pointer; font-family:inherit;
 }
 
 #art-bar {
-  margin:0 16px 8px; background:var(--surface); border:1px solid var(--border);
-  border-radius:10px; padding:10px 12px; display:none; flex-shrink:0;
+  margin:0 16px 8px; background:#1c1c1e; border:1px solid #2c2c2e;
+  border-radius:10px; padding:10px 12px; display:none;
 }
 #art-bar.show { display:block; }
-#art-bar small { color:var(--muted); font-size:11px; display:block; margin-bottom:2px; }
+#art-bar small { color:#8e8e93; font-size:11px; display:block; margin-bottom:2px; }
 #art-bar strong { font-size:14px; }
 
 .list-header {
   display:flex; justify-content:space-between; align-items:center;
   padding:0 16px 6px; flex-shrink:0;
 }
-.list-header span { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.8px; }
+.list-header span { font-size:11px; color:#8e8e93; text-transform:uppercase; letter-spacing:0.8px; }
 .badge {
-  background:var(--green); color:#000; font-size:11px; font-weight:800;
+  background:#30d158; color:#000; font-size:11px; font-weight:800;
   padding:2px 8px; border-radius:20px; min-width:24px; text-align:center;
 }
 #list {
@@ -116,41 +94,33 @@ body {
   display:flex; flex-direction:column; gap:5px;
   -webkit-overflow-scrolling:touch; min-height:60px;
 }
-.empty { text-align:center; color:var(--muted); font-size:13px; padding:20px; }
+.empty { text-align:center; color:#8e8e93; font-size:13px; padding:20px; }
 .item {
-  background:var(--surface); border:1px solid var(--border);
+  background:#1c1c1e; border:1px solid #2c2c2e;
   border-radius:10px; padding:9px 11px;
   display:flex; align-items:center; gap:9px; animation:pop 0.2s ease;
 }
-.item.fresh { border-color:var(--green); }
-@keyframes pop {
-  from { opacity:0; transform:translateY(-5px); }
-  to   { opacity:1; transform:translateY(0); }
-}
-.item-n { font-size:11px; color:var(--muted); min-width:16px; }
+.item.fresh { border-color:#30d158; }
+@keyframes pop { from{opacity:0;transform:translateY(-5px);}to{opacity:1;transform:translateY(0);} }
+.item-n { font-size:11px; color:#8e8e93; min-width:16px; }
 .item-info { flex:1; min-width:0; }
 .item-serial { font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.item-art { font-size:11px; color:var(--muted); margin-top:1px; }
-.item-del { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 2px; line-height:1; }
+.item-art { font-size:11px; color:#8e8e93; margin-top:1px; }
+.item-del { background:none; border:none; color:#8e8e93; font-size:20px; cursor:pointer; padding:0 2px; line-height:1; }
 
 .btn-row { display:flex; gap:8px; padding:10px 16px; flex-shrink:0; }
-.btn {
-  flex:1; padding:13px; border-radius:13px; border:none;
-  font-size:15px; font-weight:700; cursor:pointer; font-family:inherit;
-}
+.btn { flex:1; padding:13px; border-radius:13px; border:none; font-size:15px; font-weight:700; cursor:pointer; font-family:inherit; }
 .btn:active { transform:scale(0.97); }
-.btn-clear { background:var(--surface); color:var(--text); border:1px solid var(--border); }
-.btn-send  { background:var(--green); color:#000; }
+.btn-clear { background:#1c1c1e; color:#fff; border:1px solid #2c2c2e; }
+.btn-send  { background:#30d158; color:#000; }
 .btn-send:disabled { opacity:0.3; cursor:not-allowed; }
 
 .toast {
   position:fixed; top:14px; left:50%; transform:translateX(-50%) translateY(-80px);
-  background:var(--green); color:#000; padding:9px 18px; border-radius:20px;
+  background:#30d158; color:#000; padding:9px 18px; border-radius:20px;
   font-size:14px; font-weight:700; transition:transform 0.3s ease; z-index:999; white-space:nowrap;
 }
 .toast.show { transform:translateX(-50%) translateY(0); }
-
-canvas { display:none; }
 </style>
 </head>
 <body>
@@ -158,30 +128,24 @@ canvas { display:none; }
 <div class="toast" id="toast">✓ Додано!</div>
 
 <div class="header">
-  <div class="logo">📦</div>
   <div>
-    <h1>Warehouse Scanner</h1>
+    <h1>📦 Warehouse Scanner</h1>
     <p id="mode-label">Режим: Серійний номер (S)</p>
   </div>
 </div>
 
 <div id="video-wrap">
   <video id="video" autoplay playsinline muted></video>
-  <div class="scan-corner sc-tl"></div>
-  <div class="scan-corner sc-tr"></div>
-  <div class="scan-corner sc-bl"></div>
-  <div class="scan-corner sc-br"></div>
-  <div class="scan-line-anim"></div>
+  <div class="sc sc-tl"></div><div class="sc sc-tr"></div>
+  <div class="sc sc-bl"></div><div class="sc sc-br"></div>
   <div id="flash"></div>
 </div>
-
-<canvas id="canvas"></canvas>
 
 <button id="start-btn" onclick="startCamera()">
   <span>📷</span><span id="start-label">Натисніть щоб запустити камеру</span>
 </button>
 
-<div id="cam-status"></div>
+<div id="debug"></div>
 
 <div class="tabs">
   <button class="tab active" onclick="setMode('serial')" id="tab-s">📋 Серійний №</button>
@@ -219,6 +183,15 @@ try{const tg=window.Telegram?.WebApp;if(tg){tg.expand();tg.ready();}}catch(e){}
 let mode='serial', scanned=[], currentArticle='';
 let cameraStarted=false, videoStream=null, detector=null, detecting=false;
 let lastDetected='', lastDetectedTime=0;
+let debugLines=[];
+
+function dbg(msg){
+  debugLines.unshift(msg);
+  if(debugLines.length>5) debugLines.pop();
+  const el=document.getElementById('debug');
+  el.classList.add('show');
+  el.innerHTML=debugLines.map(l=>`<div>${l}</div>`).join('');
+}
 
 function setMode(m){
   mode=m;
@@ -227,30 +200,37 @@ function setMode(m){
   document.getElementById('mode-label').textContent=
     m==='serial'?'Режим: Серійний номер (S)':'Режим: Артикул (1P)';
 }
-function setStatus(t){document.getElementById('cam-status').textContent=t;}
 
 async function startCamera(){
   if(cameraStarted)return;
   cameraStarted=true;
   document.getElementById('start-label').textContent='⏳ Запуск…';
 
-  // Check BarcodeDetector
+  // Check support
   if(!('BarcodeDetector' in window)){
-    setStatus('❌ BarcodeDetector не підтримується. Оновіть iOS або введіть вручну.');
+    dbg('❌ BarcodeDetector відсутній в цьому браузері');
     document.getElementById('start-label').textContent='📷 Спробувати знову';
-    cameraStarted=false;return;
+    cameraStarted=false; return;
+  }
+
+  // Get supported formats
+  let formats;
+  try{
+    formats = await BarcodeDetector.getSupportedFormats();
+    dbg('✓ Формати: '+formats.join(', '));
+  }catch(e){
+    formats=['code_128','code_39','ean_13','ean_8','data_matrix','qr_code'];
+    dbg('Формати за замовчуванням');
   }
 
   try{
-    detector = new BarcodeDetector({
-      formats:['code_128','code_39','ean_13','ean_8','data_matrix','pdf417','qr_code']
-    });
+    detector = new BarcodeDetector({formats});
+    dbg('✓ Детектор створено');
   }catch(e){
-    setStatus('❌ Помилка BarcodeDetector: '+e.message);
-    cameraStarted=false;return;
+    dbg('❌ Детектор: '+e.message);
+    cameraStarted=false; return;
   }
 
-  setStatus('Запит доступу до камери…');
   try{
     videoStream = await navigator.mediaDevices.getUserMedia({
       video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}}
@@ -258,54 +238,55 @@ async function startCamera(){
     const video=document.getElementById('video');
     video.srcObject=videoStream;
     await video.play();
+    dbg('✓ Камера запущена');
 
     document.getElementById('video-wrap').style.display='block';
     document.getElementById('start-btn').style.display='none';
-    setStatus('✓ Сканування активне — наводьте на штрихкод');
 
     detecting=true;
     detectLoop();
 
   }catch(e){
-    setStatus('❌ Камера недоступна: '+e.message);
+    dbg('❌ Камера: '+e.message);
     document.getElementById('start-label').textContent='📷 Спробувати знову';
     cameraStarted=false;
   }
 }
 
 async function detectLoop(){
-  if(!detecting||!detector)return;
+  if(!detecting||!detector) return;
   const video=document.getElementById('video');
 
   if(video.readyState>=2){
     try{
       const barcodes=await detector.detect(video);
+      if(barcodes.length>0){
+        dbg('Знайдено '+barcodes.length+' штрихкод(ів): '+barcodes.map(b=>b.format+'='+b.rawValue.slice(0,15)).join(' | '));
+      }
       for(const bc of barcodes){
         const val=(bc.rawValue||'').trim();
-        if(!val||val.length<2)continue;
+        if(!val||val.length<2) continue;
         const now=Date.now();
-        if(val===lastDetected&&now-lastDetectedTime<2500)continue;
-        lastDetected=val;
-        lastDetectedTime=now;
+        if(val===lastDetected&&now-lastDetectedTime<2500) continue;
+        lastDetected=val; lastDetectedTime=now;
         onScan(val);
-        break; // one at a time
+        break;
       }
-    }catch(e){}
+    }catch(e){
+      dbg('detect err: '+e.message);
+    }
   }
 
-  if(detecting) setTimeout(detectLoop, 400);
-}
-
-function flashScreen(){
-  const f=document.getElementById('flash');
-  f.classList.add('on');
-  setTimeout(()=>f.classList.remove('on'),150);
+  if(detecting) setTimeout(detectLoop,350);
 }
 
 function onScan(text){
   text=text.replace(/[\r\n\t]/g,'').trim();
-  if(!text||text.length<2)return;
-  vibrate(); flashScreen(); showToast(text);
+  if(!text||text.length<2) return;
+  vibrate();
+  const f=document.getElementById('flash');
+  f.classList.add('on'); setTimeout(()=>f.classList.remove('on'),150);
+  showToast(text);
   if(mode==='article'){
     currentArticle=text;
     document.getElementById('art-val').textContent=text;
@@ -367,10 +348,7 @@ function sendData(){
     .catch(()=>prompt('Скопіюйте:',text));
 }
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){
-    detecting=false;
-    videoStream?.getTracks().forEach(t=>t.stop());
-  }
+  if(document.hidden){detecting=false;videoStream?.getTracks().forEach(t=>t.stop());}
 });
 </script>
 </body>
