@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 """
-Warehouse Telegram Bot v4
+Warehouse Telegram Bot v5
 ─────────────────────────
-Серийные номера читаются через Google Cloud Vision (штрихкоды) — 100% точность.
-Остальные данные (артикул, год, страна) — Claude Vision.
-
-Два способа работы:
-1. PDF — один файл содержит всё (инвойс + фото товаров)
-2. Фото по отдельности — сначала инвойс, потом товары
-
-Управление пользователями (только ADMIN_IDS):
-  /adduser 123456789 Имя   – добавить
-  /removeuser 123456789    – удалить
-  /listusers               – список
-  /myid                    – узнать свой ID
+Фото товаров → Claude читает артикул + серийник + год + страна → Google Sheets
+Никаких доп. шагов — просто отправляешь фото.
 """
 
 import os
@@ -26,18 +16,15 @@ from datetime import datetime
 import anthropic
 import gspread
 from google.oauth2.service_account import Credentials
-# google vision removed
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, ConversationHandler, filters,
 )
 
-# ─── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Config ────────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY  = os.environ["ANTHROPIC_API_KEY"]
 SPREADSHEET_ID = os.environ["GOOGLE_SPREADSHEET_ID"]
@@ -51,19 +38,12 @@ SHEET_RECEIVE = "Приёмка"
 SHEET_SHIP    = "Отгрузка"
 USERS_FILE    = "allowed_users.json"
 
-# Состояния диалога
-(
-    CHOOSE_MODE,
-    WAIT_DOCUMENT,
-    CONFIRM_INVOICE_PARSE,
-    PHOTO_GOODS,
-) = range(4)
-
+(CHOOSE_MODE, WAIT_DOCUMENT, CONFIRM_INVOICE_PARSE, PHOTO_GOODS) = range(4)
 MODE_RECEIVE = "receive"
 MODE_SHIP    = "ship"
 
 
-# ─── User management ───────────────────────────────────────────────────────────
+# ─── Users ─────────────────────────────────────────────────────────────────────
 def load_users() -> dict[int, str]:
     if not os.path.exists(USERS_FILE):
         return {}
@@ -79,12 +59,10 @@ def is_allowed(uid: int) -> bool:
 
 def operator_label(update: Update) -> str:
     u = update.effective_user
-    if u.username:
-        return f"@{u.username}"
-    return u.full_name or str(u.id)
+    return f"@{u.username}" if u.username else (u.full_name or str(u.id))
 
 
-# ─── Google Sheets ──────────────────────────────────────────────────────────────
+# ─── Sheets ────────────────────────────────────────────────────────────────────
 def get_worksheet(sheet_name: str):
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -94,13 +72,13 @@ def get_worksheet(sheet_name: str):
     gc = gspread.authorize(creds)
     sp = gc.open_by_key(SPREADSHEET_ID)
     headers = {
-        SHEET_RECEIVE: ["Дата", "Инвойс", "Оператор", "Артикул", "Ожидалось", "Получено", "Статус", "Серийный №", "Верификация", "Год произв.", "Страна происх."],
-        SHEET_SHIP:    ["Дата", "Заказ/Клиент", "Оператор", "Артикул", "Ожидалось", "Отгружено", "Статус", "Серийный №", "Верификация", "Год произв.", "Страна происх."],
+        SHEET_RECEIVE: ["Дата", "Инвойс", "Оператор", "Артикул", "Ожидалось", "Получено", "Статус", "Серийный №", "Год произв.", "Страна"],
+        SHEET_SHIP:    ["Дата", "Заказ/Клиент", "Оператор", "Артикул", "Ожидалось", "Отгружено", "Статус", "Серийный №", "Год произв.", "Страна"],
     }
     try:
         ws = sp.worksheet(sheet_name)
     except gspread.WorksheetNotFound:
-        ws = sp.add_worksheet(sheet_name, rows=2000, cols=10)
+        ws = sp.add_worksheet(sheet_name, rows=2000, cols=12)
         ws.append_row(headers[sheet_name])
     else:
         if not ws.row_values(1):
@@ -111,7 +89,6 @@ def write_rows_to_sheet(sheet_name: str, rows: list[list]):
     ws = get_worksheet(sheet_name)
     for row in rows:
         ws.append_row(row)
-
 
 
 # ─── Claude ────────────────────────────────────────────────────────────────────
@@ -130,12 +107,83 @@ def _clean_json(text: str):
     return json.loads(text.strip())
 
 
+def parse_invoice_photo(img: bytes) -> list[dict]:
+    resp = _claude.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
+            {"type": "text", "text": (
+                "Это фото инвойса или delivery note. "
+                "Извлеки список позиций: артикул и количество. "
+                "Верни ТОЛЬКО JSON массив:\n"
+                '[{"article": "артикул", "qty": число}, ...]\n'
+                "Строки Total/Итого — пропусти."
+            )},
+        ]}],
+    )
+    return _clean_json(resp.content[0].text)
+
+
+def parse_goods_photo(img_bytes: bytes) -> list[dict]:
+    """
+    Читает этикетки Siemens с фото.
+    Один тщательный промпт — фокус на точном чтении поля S.
+    """
+    resp = _claude.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=3000,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img_bytes)}},
+            {"type": "text", "text": (
+                "На фото одна или несколько коробок с этикетками Siemens.\n\n"
+                "ТВОЯ ЗАДАЧА — прочитать с каждой этикетки:\n\n"
+                "1. АРТИКУЛ (поле 1P)\n"
+                "   Формат: цифры и буквы с дефисами, например: 6ES7132-6BH01-0BA0\n"
+                "   Обычно крупный текст в верхней части этикетки\n\n"
+                "2. СЕРИЙНЫЙ НОМЕР (поле S) — САМОЕ ВАЖНОЕ\n"
+                "   На этикетке ищи букву 'S' отдельно стоящую\n"
+                "   После неё идёт серийный номер, например:\n"
+                "   'S C-RNA2A12Z' → серийник = C-RNA2A12Z\n"
+                "   'S RRT9' → серийник = RRT9\n"
+                "   'S V-T7M04LZH' → серийник = V-T7M04LZH\n"
+                "   'S LBT1137487' → серийник = LBT1137487\n"
+                "   ЧИТАЙ КАЖДУЮ БУКВУ И ЦИФРУ МАКСИМАЛЬНО ВНИМАТЕЛЬНО\n"
+                "   Различай: 0 (ноль) и O (буква О), 1 и I и L, 8 и B\n"
+                "   Серийник часто напечатан мелким шрифтом под штрихкодом поля S\n"
+                "   НИКОГДА не придумывай — если не видно чётко, верни пустую строку\n\n"
+                "3. КОЛИЧЕСТВО (поле QTY) — число, обычно 1\n\n"
+                "4. ГОД ПРОИЗВОДСТВА — формат MM.YYYY если виден\n\n"
+                "5. СТРАНА — DE/VN/CN если видна\n\n"
+                "Верни ТОЛЬКО JSON массив (никакого другого текста):\n"
+                "[\n"
+                "  {\n"
+                '    "article": "6ES7132-6BH01-0BA0",\n'
+                '    "qty": 1,\n'
+                '    "serial": "C-RNA2A12Z",\n'
+                '    "year": "07.2025",\n'
+                '    "country": "DE"\n'
+                "  }\n"
+                "]\n\n"
+                "Каждая коробка = отдельный объект в массиве.\n"
+                "Если поле не видно — пустая строка, не придумывай."
+            )},
+        ]}],
+    )
+    try:
+        items = _clean_json(resp.content[0].text)
+        if not isinstance(items, list):
+            return []
+        for item in items:
+            item["serial_text"] = item.get("serial", "")
+            item["verified"]    = None
+        return items
+    except Exception as e:
+        logger.error(f"parse_goods_photo error: {e}")
+        return []
+
+
 def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict], str]:
-    """
-    Читает весь PDF одним запросом через Claude.
-    Возвращает (expected, found, invoice_number)
-    Серийники из PDF читает Claude (штрихкоды в PDF не декодируются Vision)
-    """
     resp = _claude.messages.create(
         model="claude-opus-4-5",
         max_tokens=4000,
@@ -155,8 +203,11 @@ def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict], str]:
                 '  "goods": [{"article": "артикул", "qty": число, "serial": "серийный номер", "year": "год", "country": "страна"}, ...]\n'
                 "}\n\n"
                 "На этикетках Siemens:\n"
-                "- артикул: поле '1P' или крупный текст типа '6ES7...'\n"
-                "- серийный номер: поле 'S' — например 'S C-R3FQ8580' (бери точно как написано)\n"
+                "- артикул: поле '1P', например 6ES7132-6BH01-0BA0\n"
+                "- серийный номер: поле 'S' — текст после буквы S\n"
+                "  Например 'S C-R3FQ8580' → C-R3FQ8580\n"
+                "  Читай каждую букву внимательно: различай 0/O, 1/I/L, 8/B\n"
+                "  Если не видно чётко — пустая строка\n"
                 "- год: дата производства MM.YYYY\n"
                 "- страна: Made in Germany = DE, Made in Vietnam = VN и т.д.\n"
                 "- qty: поле QTY, если не видно — 1\n"
@@ -171,121 +222,7 @@ def parse_full_pdf(pdf_bytes: bytes) -> tuple[list[dict], list[dict], str]:
     return [], [], ""
 
 
-def parse_invoice_photo(img: bytes) -> list[dict]:
-    """Читает фото инвойса → [{article, qty}]"""
-    resp = _claude.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
-            {"type": "text", "text": (
-                "Это фото инвойса или delivery note. "
-                "Извлеки список позиций: артикул и количество. "
-                "Верни ТОЛЬКО JSON массив:\n"
-                '[{"article": "артикул", "qty": число}, ...]\n'
-                "Строки Total/Итого — пропусти."
-            )},
-        ]}],
-    )
-    return _clean_json(resp.content[0].text)
-
-
-def _read_serials_pass1(img: bytes) -> list[dict]:
-    """Первое чтение — читает текст поля S как обычный текст."""
-    resp = _claude.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=2000,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
-            {"type": "text", "text": (
-                "Это фото коробок с товарами. Извлеки данные с каждой этикетки.\n"
-                "Верни ТОЛЬКО JSON массив:\n"
-                '[{"article":"...", "qty":N, "serial":"...", "year":"...", "country":"..."}, ...]\n\n'
-                "ПРАВИЛА:\n"
-                "- article: поле 1P, например 6ES7132-6BH01-0BA0\n"
-                "- serial: текст поля S на этикетке\n"
-                "  Если написано 'S C-RNA2A12Z' → serial = 'C-RNA2A12Z'\n"
-                "  Если написано 'S RRT9' → serial = 'RRT9'\n"
-                "  Если написано 'S LBT1137487' → serial = 'LBT1137487'\n"
-                "  Читай КАЖДУЮ букву и цифру максимально внимательно\n"
-                "  Если не видно чётко — пустая строка\n"
-                "- year: MM.YYYY если видно, иначе пустую строку\n"
-                "- country: DE/VN/CN если видно, иначе пустую строку\n"
-                "- qty: поле QTY если видно, иначе 1\n"
-                "Каждая коробка = отдельная строка. Не придумывай данные."
-            )},
-        ]}],
-    )
-    return _clean_json(resp.content[0].text)
-
-
-def _read_serials_pass2(img: bytes, articles: list[str]) -> list[str]:
-    """Второе независимое чтение — читает только серийники поля S."""
-    arts_str = ", ".join(articles)
-    resp = _claude.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1000,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _b64(img)}},
-            {"type": "text", "text": (
-                f"На фото {len(articles)} коробок с артикулами: {arts_str}\n\n"
-                "Для каждой коробки найди серийный номер — это текст рядом с буквой S на этикетке.\n"
-                "Читай максимально внимательно каждую букву и цифру.\n"
-                "Верни ТОЛЬКО JSON массив серийников в том же порядке что и коробки на фото:\n"
-                '["серийник1", "серийник2", ...]\n'
-                "Если серийник не виден — пустая строка.\n"
-                "Не придумывай данные."
-            )},
-        ]}],
-    )
-    result = _clean_json(resp.content[0].text)
-    if isinstance(result, list):
-        return [str(s) for s in result]
-    return [""] * len(articles)
-
-
-def parse_goods_photo_claude(img: bytes) -> list[dict]:
-    """
-    Двойное независимое чтение серийников через Claude.
-    Pass 1: читает все данные включая серийник поля S
-    Pass 2: читает только серийники независимо
-    Сравнивает — если совпадают = verified, если нет = предупреждение.
-    """
-    items = _read_serials_pass1(img)
-    if not items:
-        return items
-
-    articles  = [it.get("article", "") for it in items]
-    serials_2 = _read_serials_pass2(img, articles)
-
-    for i, item in enumerate(items):
-        s1 = str(item.get("serial", "")).strip().upper()
-        s2 = str(serials_2[i] if i < len(serials_2) else "").strip().upper()
-
-        if s1 and s2:
-            if s1 == s2:
-                item["serial_text"]    = item.get("serial", "")
-                item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
-                item["verified"]       = True
-                logger.info(f"Serial verified: {s1}")
-            else:
-                item["serial_text"]    = item.get("serial", "")
-                item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
-                item["verified"]       = False
-                logger.warning(f"Serial MISMATCH pass1={s1} pass2={s2}")
-        else:
-            item["serial_text"]    = item.get("serial", "")
-            item["serial_barcode"] = serials_2[i] if i < len(serials_2) else ""
-            item["verified"]       = None
-
-    return items
-
-def parse_goods_photo(img_bytes: bytes) -> list[dict]:
-    """Двойное чтение через Claude — верификация серийников."""
-    return parse_goods_photo_claude(img_bytes)
-
-
-# ─── Comparison ────────────────────────────────────────────────────────────────
+# ─── Compare ───────────────────────────────────────────────────────────────────
 def compare(expected: list[dict], found: list[dict]):
     exp_map: dict[str, int] = {}
     for it in expected:
@@ -324,11 +261,13 @@ def compare(expected: list[dict], found: list[dict]):
     for art, exp, got, st in meta:
         for item in found_details.get(art, [{}]):
             sheet_rows.append({
-                "article":  art, "expected": exp, "got": got, "status": st,
-                "serial":   item.get("serial",   ""),
-                "verified": item.get("verified",  None),
-                "year":     item.get("year",      ""),
-                "country":  item.get("country",   ""),
+                "article":  art,
+                "expected": exp,
+                "got":      got,
+                "status":   st,
+                "serial":   item.get("serial", ""),
+                "year":     item.get("year",   ""),
+                "country":  item.get("country",""),
             })
 
     return "\n".join(lines), has_prob, sheet_rows
@@ -355,34 +294,29 @@ async def finalize(update, context, expected, found, invoice, mode):
     await update.message.reply_text(text, parse_mode="Markdown")
 
     try:
-        now  = datetime.now().strftime("%Y-%m-%d %H:%M")
-        sn   = SHEET_RECEIVE if mode == MODE_RECEIVE else SHEET_SHIP
-        def verified_label(v):
-            if v is True:  return "✅ Оригинал"
-            if v is False: return "🚨 ПОДДЕЛКА?"
-            return "—"
-
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        sn  = SHEET_RECEIVE if mode == MODE_RECEIVE else SHEET_SHIP
         rows = [[now, invoice, op,
                  r["article"], r["expected"], r["got"], r["status"],
-                 r["serial"], verified_label(r.get("verified")), r["year"], r["country"]]
+                 r["serial"], r["year"], r["country"]]
                 for r in sheet_rows]
         write_rows_to_sheet(sn, rows)
         await update.message.reply_text(f"✅ Записано → лист «{sn}»")
     except Exception as e:
         logger.error(f"Sheets: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка записи в таблицу: {e}")
+        await update.message.reply_text(f"⚠️ Ошибка записи: {e}")
 
     context.user_data.clear()
 
 
-# ─── Admin commands ─────────────────────────────────────────────────────────────
+# ─── Admin ─────────────────────────────────────────────────────────────────────
 async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Только для администраторов.")
         return
     args = context.args
     if not args:
-        await update.message.reply_text("Использование:\n`/adduser 123456789 Имя Фамилия`", parse_mode="Markdown")
+        await update.message.reply_text("Использование:\n`/adduser 123456789 Имя`", parse_mode="Markdown")
         return
     try:
         uid = int(args[0])
@@ -459,7 +393,7 @@ async def choose_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await q.edit_message_text(
         f"{'📦' if mode==MODE_RECEIVE else '🚚'} *{label}*\n\n"
         "Отправьте:\n"
-        "• 📄 *PDF* — бот обработает всё сам (инвойс + товары)\n"
+        "• 📄 *PDF* — бот обработает всё сам\n"
         "• 📸 *Фото инвойса* — если нет PDF",
         parse_mode="Markdown",
     )
@@ -491,7 +425,6 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             f"\n\n📦 Найдено товаров: *{len(found)}* позиций\n⏳ Считаю результат...",
             parse_mode="Markdown",
         )
-
         await finalize(update, context, expected, found, invoice, mode)
         return ConversationHandler.END
 
@@ -541,69 +474,47 @@ async def confirm_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     context.user_data["found_items"] = []
     action = "получили" if context.user_data["mode"] == MODE_RECEIVE else "отгружаете"
-    scanner_kb = [[
-        InlineKeyboardButton(
-            "📱 Сканувати серійники",
-            web_app=WebAppInfo(url="https://eduardbotzapa.github.io/warehouse-bot/scanner.html")
-        )
-    ]]
     await q.edit_message_text(
-        f"✅ Інвойс прийнятий.\n\n"
-        f"Крок 1️⃣ — Відправте фото товарів (Claude прочитає артикул, рік, країну)\n\n"
-        f"Крок 2️⃣ — Натисніть кнопку нижче щоб відсканувати серійники\n\n"
-        "Коли все готово — /done",
-        reply_markup=InlineKeyboardMarkup(scanner_kb),
+        f"✅ Инвойс принят.\n\n"
+        f"📸 Отправьте фото товаров которые {action}.\n"
+        "Claude прочитает артикул, серийник, год, страну автоматически.\n\n"
+        "Можно отправить несколько фото. Когда готово — /done",
     )
     return PHOTO_GOODS
 
 
 async def handle_goods_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    msg = await update.message.reply_text("🔍 Читаю штрихкоды и данные...")
+    msg = await update.message.reply_text("🔍 Читаю этикетки...")
     try:
         photo = update.message.photo[-1]
         data  = bytes(await (await photo.get_file()).download_as_bytearray())
         items = parse_goods_photo(data)
 
-        context.user_data["found_items"].extend(items)
+        if not items:
+            await msg.edit_text("❌ Не удалось распознать этикетки. Попробуйте снова.")
+            return PHOTO_GOODS
+
+        context.user_data.setdefault("found_items", []).extend(items)
         total = len(context.user_data["found_items"])
 
-        lines      = []
-        forgeries  = []
+        lines = []
         for it in items:
-            verified = it.get("verified")
-            serial   = it.get("serial", "")
-            s_text   = it.get("serial_text", "")
-            s_bar    = it.get("serial_barcode", "")
-
-            if verified is False:
-                ico  = "🚨"
-                note = f" | ⚠️ ПОДДЕЛКА? текст=`{s_text}` штрихкод=`{s_bar}`"
-                forgeries.append(it.get("article","?"))
-            elif verified is True:
-                ico  = "✅"
-                note = f" | S/N: `{serial}` ✅"
-            else:
-                ico  = "•"
-                note = f" | S/N: `{serial}`" if serial else ""
-
-            line = f"{ico} `{it.get('article','?')}` — {it.get('qty',1)} шт.{note}"
+            serial = it.get("serial", "")
+            line   = f"• `{it.get('article','?')}` — {it.get('qty',1)} шт."
+            if serial:  line += f" | S/N: `{serial}`"
             if it.get("year"):    line += f" | {it['year']}"
             if it.get("country"): line += f" | {it['country']}"
             lines.append(line)
 
-        alert = ""
-        if forgeries:
-            alert = f"\n\n🚨 *ВОЗМОЖНЫЕ ПОДДЕЛКИ:* {', '.join(forgeries)}"
-
         await msg.edit_text(
-            f"✅ Это фото: {len(items)} поз.\n\n" + "\n".join(lines) +
-            alert +
-            f"\n\n📊 Накоплено: *{total}* строк | Ещё фото или /done",
+            f"✅ Это фото: *{len(items)}* поз.\n\n" + "\n".join(lines) +
+            f"\n\n📊 Накоплено: *{total}* строк\n"
+            "Ещё фото или /done",
             parse_mode="Markdown",
         )
     except Exception as e:
         logger.warning(f"Goods photo: {e}")
-        await msg.edit_text("❌ Не удалось распознать. Попробуйте снова или /done.")
+        await msg.edit_text("❌ Ошибка. Попробуйте снова или /done.")
     return PHOTO_GOODS
 
 
@@ -619,59 +530,6 @@ async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await finalize(update, context, expected, found, invoice, mode)
     return ConversationHandler.END
-
-
-async def handle_scanner_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает серийники от Mini App сканера."""
-    try:
-        raw  = update.message.web_app_data.data
-        data = json.loads(raw)
-        items = data.get("items", [])
-
-        if not items:
-            await update.message.reply_text("❌ Сканер не передав даних.")
-            return PHOTO_GOODS
-
-        # Merge scanner serials with existing found_items
-        found = context.user_data.get("found_items", [])
-
-        # Build map of existing items by article for merging
-        scanned_serials = [it.get("serial", "") for it in items]
-        scanned_articles = [it.get("article", "") for it in items]
-
-        # If found_items exist — update serials in order
-        if found:
-            for i, item in enumerate(found):
-                if i < len(items):
-                    item["serial"]   = items[i].get("serial", item.get("serial", ""))
-                    item["verified"] = True
-        else:
-            # No photo yet — create items from scanner only
-            for it in items:
-                found.append({
-                    "article":  it.get("article", "—"),
-                    "qty":      1,
-                    "serial":   it.get("serial", ""),
-                    "verified": True,
-                    "year":     "",
-                    "country":  "",
-                })
-
-        context.user_data["found_items"] = found
-
-        lines = [f"• `{it.get('serial','?')}`" + (f" — {it.get('article','')}" if it.get('article') else "") for it in items]
-        await update.message.reply_text(
-            f"📱 *Сканер передав {len(items)} серійників:*\n\n" +
-            "\n".join(lines) +
-            "\n\nВідправте фото товарів або /done якщо фото вже є.",
-            parse_mode="Markdown",
-        )
-        return PHOTO_GOODS
-
-    except Exception as e:
-        logger.error(f"Scanner data error: {e}")
-        await update.message.reply_text("❌ Помилка обробки даних сканера.")
-        return PHOTO_GOODS
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -703,7 +561,6 @@ def main():
             ],
             PHOTO_GOODS: [
                 MessageHandler(filters.PHOTO, handle_goods_photo),
-                MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_scanner_data),
                 CommandHandler("done", done),
             ],
         },
@@ -717,7 +574,7 @@ def main():
     app.add_handler(CommandHandler("listusers",  cmd_listusers))
     app.add_handler(CommandHandler("myid",       cmd_myid))
 
-    logger.info("🤖 Warehouse bot v4 started.")
+    logger.info("🤖 Warehouse bot v5 started.")
     app.run_polling(drop_pending_updates=True)
 
 
