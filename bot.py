@@ -68,7 +68,12 @@ def get_worksheet(sheet_name: str):
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
+    creds_json = os.environ.get("GOOGLE_CREDS_JSON", "")
+    if creds_json:
+        import json as _json
+        creds = Credentials.from_service_account_info(_json.loads(creds_json), scopes=scopes)
+    else:
+        creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
     gc = gspread.authorize(creds)
     sp = gc.open_by_key(SPREADSHEET_ID)
     headers = {
