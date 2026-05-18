@@ -26,32 +26,21 @@ body {
 .header h1 { font-size:15px; font-weight:700; }
 .header p  { font-size:11px; color:var(--muted); }
 
-/* VIDEO PREVIEW */
 #video-wrap {
   position:relative; width:100%; flex-shrink:0;
   background:#000; display:none;
 }
 #video {
-  width:100%; display:block;
-  max-height:42vw; object-fit:cover;
-}
-/* scanning frame overlay */
-#video-wrap::after {
-  content:'';
-  position:absolute; inset:0;
-  background: linear-gradient(rgba(0,0,0,0.15) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.15) 100%);
-  pointer-events:none;
+  width:100%; display:block; max-height:45vw; object-fit:cover;
 }
 .scan-corner {
   position:absolute; width:24px; height:24px;
-  border-color:var(--green); border-style:solid;
-  pointer-events:none;
+  border-color:var(--green); border-style:solid; pointer-events:none;
 }
 .sc-tl { top:8px;  left:8px;  border-width:3px 0 0 3px; border-radius:3px 0 0 0; }
 .sc-tr { top:8px;  right:8px; border-width:3px 3px 0 0; border-radius:0 3px 0 0; }
 .sc-bl { bottom:8px; left:8px;  border-width:0 0 3px 3px; border-radius:0 0 0 3px; }
 .sc-br { bottom:8px; right:8px; border-width:0 3px 3px 0; border-radius:0 0 3px 0; }
-
 .scan-line-anim {
   position:absolute; left:5%; right:5%;
   height:2px; background:linear-gradient(90deg,transparent,var(--green),transparent);
@@ -62,8 +51,13 @@ body {
   90%  { top:90%; opacity:1; }
   100% { top:90%; opacity:0; }
 }
+/* Flash on scan */
+#flash {
+  position:absolute; inset:0; background:#30d158;
+  opacity:0; pointer-events:none; transition:opacity 0.08s;
+}
+#flash.on { opacity:0.35; }
 
-/* START BUTTON */
 #start-btn {
   margin:12px 16px; padding:16px; border-radius:14px;
   border:2px dashed var(--green); background:rgba(48,209,88,0.08);
@@ -75,10 +69,9 @@ body {
 
 #cam-status {
   font-size:12px; color:var(--muted); text-align:center;
-  padding:2px 16px 6px; min-height:20px; flex-shrink:0;
+  padding:2px 16px 8px; min-height:20px; flex-shrink:0;
 }
 
-/* TABS */
 .tabs { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
 .tab {
   flex:1; padding:9px; border-radius:10px;
@@ -88,7 +81,6 @@ body {
 }
 .tab.active { background:var(--blue); border-color:var(--blue); color:#fff; }
 
-/* MANUAL */
 .manual-wrap { display:flex; gap:8px; padding:0 16px 10px; flex-shrink:0; }
 .manual-input {
   flex:1; padding:10px 12px; border-radius:10px;
@@ -99,10 +91,9 @@ body {
 .manual-add {
   padding:10px 14px; border-radius:10px; background:var(--blue);
   border:none; color:#fff; font-size:18px; font-weight:700;
-  cursor:pointer; font-family:inherit; flex-shrink:0;
+  cursor:pointer; font-family:inherit;
 }
 
-/* ART BAR */
 #art-bar {
   margin:0 16px 8px; background:var(--surface); border:1px solid var(--border);
   border-radius:10px; padding:10px 12px; display:none; flex-shrink:0;
@@ -111,7 +102,6 @@ body {
 #art-bar small { color:var(--muted); font-size:11px; display:block; margin-bottom:2px; }
 #art-bar strong { font-size:14px; }
 
-/* LIST */
 .list-header {
   display:flex; justify-content:space-between; align-items:center;
   padding:0 16px 6px; flex-shrink:0;
@@ -143,7 +133,6 @@ body {
 .item-art { font-size:11px; color:var(--muted); margin-top:1px; }
 .item-del { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 2px; line-height:1; }
 
-/* BOTTOM */
 .btn-row { display:flex; gap:8px; padding:10px 16px; flex-shrink:0; }
 .btn {
   flex:1; padding:13px; border-radius:13px; border:none;
@@ -160,6 +149,8 @@ body {
   font-size:14px; font-weight:700; transition:transform 0.3s ease; z-index:999; white-space:nowrap;
 }
 .toast.show { transform:translateX(-50%) translateY(0); }
+
+canvas { display:none; }
 </style>
 </head>
 <body>
@@ -174,7 +165,6 @@ body {
   </div>
 </div>
 
-<!-- Video preview -->
 <div id="video-wrap">
   <video id="video" autoplay playsinline muted></video>
   <div class="scan-corner sc-tl"></div>
@@ -182,9 +172,11 @@ body {
   <div class="scan-corner sc-bl"></div>
   <div class="scan-corner sc-br"></div>
   <div class="scan-line-anim"></div>
+  <div id="flash"></div>
 </div>
 
-<!-- Start button (hidden after camera starts) -->
+<canvas id="canvas"></canvas>
+
 <button id="start-btn" onclick="startCamera()">
   <span>📷</span><span id="start-label">Натисніть щоб запустити камеру</span>
 </button>
@@ -224,9 +216,9 @@ body {
 <script>
 try{const tg=window.Telegram?.WebApp;if(tg){tg.expand();tg.ready();}}catch(e){}
 
-let mode='serial',scanned=[],currentArticle='';
-let cameraStarted=false,codeReader=null,videoStream=null;
-let lastDetected='',lastDetectedTime=0;
+let mode='serial', scanned=[], currentArticle='';
+let cameraStarted=false, videoStream=null, detector=null, detecting=false;
+let lastDetected='', lastDetectedTime=0;
 
 function setMode(m){
   mode=m;
@@ -235,101 +227,85 @@ function setMode(m){
   document.getElementById('mode-label').textContent=
     m==='serial'?'Режим: Серійний номер (S)':'Режим: Артикул (1P)';
 }
-
-function setStatus(text){document.getElementById('cam-status').textContent=text;}
-
-function loadScript(src){
-  return new Promise((resolve,reject)=>{
-    const s=document.createElement('script');
-    s.src=src;s.onload=resolve;s.onerror=reject;
-    document.head.appendChild(s);
-  });
-}
+function setStatus(t){document.getElementById('cam-status').textContent=t;}
 
 async function startCamera(){
   if(cameraStarted)return;
   cameraStarted=true;
-  document.getElementById('start-label').textContent='⏳ Завантаження…';
-  setStatus('Завантаження бібліотеки…');
+  document.getElementById('start-label').textContent='⏳ Запуск…';
 
-  let loaded=false;
-  for(const cdn of[
-    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.3/zxing.min.js',
-    'https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js'
-  ]){
-    try{await loadScript(cdn);loaded=true;break;}catch(e){}
+  // Check BarcodeDetector
+  if(!('BarcodeDetector' in window)){
+    setStatus('❌ BarcodeDetector не підтримується. Оновіть iOS або введіть вручну.');
+    document.getElementById('start-label').textContent='📷 Спробувати знову';
+    cameraStarted=false;return;
   }
 
-  if(!loaded){
-    setStatus('❌ Бібліотека не завантажилась. Введіть вручну.');
-    document.getElementById('start-label').textContent='📷 Спробувати знову';
+  try{
+    detector = new BarcodeDetector({
+      formats:['code_128','code_39','ean_13','ean_8','data_matrix','pdf417','qr_code']
+    });
+  }catch(e){
+    setStatus('❌ Помилка BarcodeDetector: '+e.message);
     cameraStarted=false;return;
   }
 
   setStatus('Запит доступу до камери…');
   try{
-    videoStream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}}
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}}
     });
-
     const video=document.getElementById('video');
     video.srcObject=videoStream;
     await video.play();
 
-    // Show video, hide start button
     document.getElementById('video-wrap').style.display='block';
     document.getElementById('start-btn').style.display='none';
     setStatus('✓ Сканування активне — наводьте на штрихкод');
 
-    startZXing(video);
+    detecting=true;
+    detectLoop();
 
   }catch(e){
-    setStatus('❌ Немає доступу до камери. Safari → Налаштування → Камера');
+    setStatus('❌ Камера недоступна: '+e.message);
     document.getElementById('start-label').textContent='📷 Спробувати знову';
     cameraStarted=false;
   }
 }
 
-function startZXing(video){
-  try{
-    const Z=window.ZXing||window.ZXingBrowser;
-    if(!Z){setStatus('❌ ZXing не знайдено');return;}
+async function detectLoop(){
+  if(!detecting||!detector)return;
+  const video=document.getElementById('video');
 
-    const hints=new Map();
-    if(Z.DecodeHintType&&Z.BarcodeFormat){
-      hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,[
-        Z.BarcodeFormat.CODE_128,
-        Z.BarcodeFormat.CODE_39,
-        Z.BarcodeFormat.EAN_13,
-        Z.BarcodeFormat.DATA_MATRIX,
-        Z.BarcodeFormat.ITF,
-      ]);
-      hints.set(Z.DecodeHintType.TRY_HARDER,true);
-    }
-
-    const Reader=Z.BrowserMultiFormatReader||Z.MultiFormatReader;
-    codeReader=new Reader(hints);
-
-    codeReader.decodeFromVideoElement(video,(result,err)=>{
-      if(!result)return;
-      const val=(result.getText?result.getText():String(result)).trim();
-      if(!val||val.length<2)return;
-      const now=Date.now();
-      if(val===lastDetected&&now-lastDetectedTime<2500)return;
-      lastDetected=val;lastDetectedTime=now;
-      onScan(val);
-    });
-
-  }catch(e){
-    setStatus('❌ Помилка ZXing: '+e.message);
-    console.error(e);
+  if(video.readyState>=2){
+    try{
+      const barcodes=await detector.detect(video);
+      for(const bc of barcodes){
+        const val=(bc.rawValue||'').trim();
+        if(!val||val.length<2)continue;
+        const now=Date.now();
+        if(val===lastDetected&&now-lastDetectedTime<2500)continue;
+        lastDetected=val;
+        lastDetectedTime=now;
+        onScan(val);
+        break; // one at a time
+      }
+    }catch(e){}
   }
+
+  if(detecting) setTimeout(detectLoop, 400);
+}
+
+function flashScreen(){
+  const f=document.getElementById('flash');
+  f.classList.add('on');
+  setTimeout(()=>f.classList.remove('on'),150);
 }
 
 function onScan(text){
   text=text.replace(/[\r\n\t]/g,'').trim();
   if(!text||text.length<2)return;
-  vibrate();showToast(text);
+  vibrate(); flashScreen(); showToast(text);
   if(mode==='article'){
     currentArticle=text;
     document.getElementById('art-val').textContent=text;
@@ -350,9 +326,8 @@ document.getElementById('manual').addEventListener('keydown',e=>{if(e.key==='Ent
 
 function render(){
   const list=document.getElementById('list');
-  const badge=document.getElementById('badge');
+  document.getElementById('badge').textContent=scanned.length;
   document.getElementById('btn-send').disabled=scanned.length===0;
-  badge.textContent=scanned.length;
   if(!scanned.length){list.innerHTML='<div class="empty">Штрихкоди ще не відскановані</div>';return;}
   list.innerHTML=scanned.map((it,i)=>`
     <div class="item ${i===0?'fresh':''}" id="i${i}">
@@ -393,7 +368,7 @@ function sendData(){
 }
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){
-    try{codeReader?.reset();}catch(e){}
+    detecting=false;
     videoStream?.getTracks().forEach(t=>t.stop());
   }
 });
